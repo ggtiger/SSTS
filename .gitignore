@@ -52,6 +52,7 @@ next-env.d.ts
 !/src-tauri/server/skills/
 /src-tauri/server/skills/*
 !/src-tauri/server/skills/.gitkeep
+/src-tauri/frontend/
 /src-tauri/python/
 /src-tauri/node/
 /src-tauri/icons/*.icns
