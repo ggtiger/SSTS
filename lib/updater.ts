@@ -214,7 +214,7 @@ export async function downloadUpdate(
 
   let downloaded = 0
   let totalSize = 0
-  await update.download((event: { event: string; data: { contentLength?: number; chunkLength: number } }) => {
+  await update.download((event) => {
     switch (event.event) {
       case 'Started':
         downloaded = 0
