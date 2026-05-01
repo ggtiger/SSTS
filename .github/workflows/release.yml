@@ -182,8 +182,9 @@ jobs:
           tar xzf "$APP_TAR" -C "$TMPDIR/current-app"
           SERVER_DIR=$(find "$TMPDIR/current-app" -path "*/Resources/server" -type d | head -1 || true)
           if [ -z "$SERVER_DIR" ]; then
-            echo "ERROR: Server directory not found in app bundle"
-            exit 1
+            echo "Server directory not found in app bundle, skipping delta generation"
+            echo "(This is expected for the first release or if server is not bundled as a resource)"
+            exit 0
           fi
 
           NEW_SERVER_DIR="$SERVER_DIR"
