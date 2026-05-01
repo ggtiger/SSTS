@@ -1,0 +1,659 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+          - platform: macos-x64
+            runner: macos-latest
+            target: x86_64-apple-darwin
+          - platform: windows-x64
+            runner: windows-latest
+            target: ''
+          - platform: linux-x64
+            runner: ubuntu-22.04
+            target: ''
+            bundles: deb,rpm
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'linux-x64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Add Rust target
+        if: matrix.target != ''
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Generate icons from source
+        run: npx tauri icon src-tauri/icons/icon-source.png
+
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'SSTS ${{ github.ref_name }}'
+          releaseBody: '在下方 Assets 中下载对应平台的安装包。'
+          releaseDraft: true
+          prerelease: false
+          tauriScript: npx tauri
+          args: ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }} ${{ matrix.bundles != '' && format('--bundles {0}', matrix.bundles) || '' }}
+          updaterJsonPreferNsis: true
+
+  # 生成 server delta 文件并更新 latest.json
+  generate-delta:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整历史和所有 tag
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate server patches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME}"
+          NEW_VERSION=$(jq -r '.version' package.json)
+          TAURI_VERSION=$(jq -r '.version' src-tauri/tauri.conf.json)
+          echo "=== Generating file-level patches for ${TAG} (tauri ${TAURI_VERSION}, server ${NEW_VERSION}) ==="
+
+          # 上传并回验函数：上传后从 GitHub 重新下载校验完整性
+          upload_and_verify() {
+            local file="$1"
+            local tag="$2"
+            local max_retries=3
+            local attempt=1
+            local basename=$(basename "$file")
+
+            while [ $attempt -le $max_retries ]; do
+              echo "Upload attempt $attempt/$max_retries: $basename"
+              gh release upload "$tag" "$file" --repo YOUR_ORG/ssts --clobber
+
+              # 回验：从 GitHub 重新下载并校验
+              local verify_dir=$(mktemp -d)
+              gh release download "$tag" --repo YOUR_ORG/ssts --pattern "$basename" --dir "$verify_dir"
+
+              if [[ "$basename" == *.tar.gz ]]; then
+                if gzip -t "$verify_dir/$basename" 2>/dev/null; then
+                  echo "✓ Upload verified: $basename"
+                  rm -rf "$verify_dir"
+                  return 0
+                else
+                  echo "✗ Upload corrupted on attempt $attempt: $basename"
+                fi
+              elif [[ "$basename" == *.json ]]; then
+                if jq empty "$verify_dir/$basename" 2>/dev/null; then
+                  echo "✓ Upload verified: $basename"
+                  rm -rf "$verify_dir"
+                  return 0
+                else
+                  echo "✗ Upload corrupted on attempt $attempt: $basename"
+                fi
+              else
+                echo "✓ Upload completed (no format check): $basename"
+                rm -rf "$verify_dir"
+                return 0
+              fi
+
+              rm -rf "$verify_dir"
+              attempt=$((attempt + 1))
+              sleep 5
+            done
+
+            echo "ERROR: Upload failed after $max_retries attempts: $basename"
+            return 1
+          }
+
+          TMPDIR=$(mktemp -d)
+          trap "rm -rf $TMPDIR" EXIT
+
+          # 1. 从当前 Release 的全量包中提取 server
+          echo "--- Extracting server from current release ---"
+          gh release download "$TAG" --repo YOUR_ORG/ssts \
+            --pattern "*.app.tar.gz" --dir "$TMPDIR/current" || true
+
+          APP_TAR=$(ls "$TMPDIR/current"/*.app.tar.gz 2>/dev/null | head -1 || true)
+          if [ -z "$APP_TAR" ]; then
+            echo "No .app.tar.gz found in current release, skipping"
+            exit 0
+          fi
+
+          mkdir -p "$TMPDIR/current-app"
+          tar xzf "$APP_TAR" -C "$TMPDIR/current-app"
+          SERVER_DIR=$(find "$TMPDIR/current-app" -path "*/Resources/server" -type d | head -1 || true)
+          if [ -z "$SERVER_DIR" ]; then
+            echo "ERROR: Server directory not found in app bundle"
+            exit 1
+          fi
+
+          NEW_SERVER_DIR="$SERVER_DIR"
+
+          # 压缩版本用于下载
+          gzip -c <(tar cf - -C "$SERVER_DIR" .) > "$TMPDIR/server-new.tar.gz"
+          gzip -t "$TMPDIR/server-new.tar.gz" || { echo "ERROR: gzip verification failed!"; exit 1; }
+          NEW_GZ_SIZE=$(stat -c%s "$TMPDIR/server-new.tar.gz")
+          echo "New server tar.gz: ${NEW_GZ_SIZE} bytes"
+
+          # 2. 始终上传当前版本 server tar
+          SERVER_TAR_NAME="server-${NEW_VERSION}.tar.gz"
+          cp "$TMPDIR/server-new.tar.gz" "$TMPDIR/${SERVER_TAR_NAME}"
+          echo "--- Uploading server tar for future patches ---"
+          upload_and_verify "$TMPDIR/${SERVER_TAR_NAME}" "$TAG"
+
+          # 3. 获取最近 3 个旧版本 tag
+          PREV_TAGS=$(git tag --sort=-creatordate | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v "^${TAG}$" | head -3)
+          if [ -z "$PREV_TAGS" ]; then
+            echo "No previous tags found, skipping patch generation"
+            exit 0
+          fi
+          echo "Previous tags to generate patches for: $(echo $PREV_TAGS | tr '\n' ' ')"
+
+          # 4. 对每个旧版本循环生成文件级补丁
+          DELTAS_JSON="[]"
+          for PREV_TAG in $PREV_TAGS; do
+            echo ""
+            echo "--- Processing ${PREV_TAG} ---"
+
+            # v* tag 需要从 Release 资产中查找实际 server 版本
+            PROBE_DIR=$(mktemp -d)
+            if gh release download "$PREV_TAG" --repo YOUR_ORG/ssts \
+              --pattern "server-*.tar.gz" --dir "$PROBE_DIR" 2>/dev/null; then
+              FOUND_TAR=$(ls -1 "$PROBE_DIR"/server-*.tar.gz 2>/dev/null | grep -v 'patch' | head -1)
+              if [ -n "$FOUND_TAR" ]; then
+                OLD_VERSION=$(basename "$FOUND_TAR" | sed 's/^server-//' | sed 's/\.tar\.gz$//')
+              else
+                echo "WARNING: No server tar in $PREV_TAG, skipping"
+                rm -rf "$PROBE_DIR"
+                continue
+              fi
+            else
+              OLD_VERSION=$(echo "$PREV_TAG" | sed 's/^v//')
+              echo "No server tar found for $PREV_TAG, falling back to tag-based version: $OLD_VERSION"
+            fi
+            rm -rf "$PROBE_DIR"
+
+            echo "Resolved actual server version: ${OLD_VERSION}"
+
+            OLD_WORKDIR="$TMPDIR/old-${OLD_VERSION}"
+            mkdir -p "$OLD_WORKDIR"
+
+            # 优先从 Release 下载旧版本的 server tar
+            gh release download "$PREV_TAG" --repo YOUR_ORG/ssts \
+              --pattern "server-${OLD_VERSION}.tar.gz" --dir "$OLD_WORKDIR" 2>/dev/null || true
+
+            if [ ! -f "$OLD_WORKDIR/server-${OLD_VERSION}.tar.gz" ]; then
+              # 回退：从旧版本的全量包中提取 server
+              echo "No standalone server tar for ${PREV_TAG}, extracting from app bundle..."
+              gh release download "$PREV_TAG" --repo YOUR_ORG/ssts \
+                --pattern "*.app.tar.gz" --dir "$OLD_WORKDIR" 2>/dev/null || true
+
+              OLD_APP_TAR=$(ls "$OLD_WORKDIR"/*.app.tar.gz 2>/dev/null | head -1 || true)
+              if [ -n "$OLD_APP_TAR" ]; then
+                echo "Extracting server from ${OLD_APP_TAR}..."
+                mkdir -p "$OLD_WORKDIR/app"
+                tar xzf "$OLD_APP_TAR" -C "$OLD_WORKDIR/app"
+                OLD_SERVER=$(find "$OLD_WORKDIR/app" -path "*/Resources/server" -type d | head -1 || true)
+                if [ -n "$OLD_SERVER" ]; then
+                  tar czf "$OLD_WORKDIR/server-${OLD_VERSION}.tar.gz" -C "$OLD_SERVER" .
+                else
+                  echo "Server directory not found in ${PREV_TAG} app bundle, skipping this version"
+                  continue
+                fi
+              else
+                echo "No archive found for ${PREV_TAG}, skipping this version"
+                continue
+              fi
+            fi
+
+            OLD_TAR="$OLD_WORKDIR/server-${OLD_VERSION}.tar.gz"
+            if [ ! -f "$OLD_TAR" ]; then
+              echo "Old server tar not found, skipping"
+              continue
+            fi
+
+            # 解压旧版 server
+            OLD_SERVER_DIR=$(mktemp -d)
+            tar xzf "$OLD_TAR" -C "$OLD_SERVER_DIR"
+
+            # 生成两边的文件列表和哈希
+            PATCH_DIR=$(mktemp -d)
+
+            (cd "$OLD_SERVER_DIR" && find . -type f | sort | while read f; do
+              echo "$(sha256sum "$f" | cut -d' ' -f1) $f"
+            done) > /tmp/old_hashes.txt
+
+            (cd "$NEW_SERVER_DIR" && find . -type f | sort | while read f; do
+              echo "$(sha256sum "$f" | cut -d' ' -f1) $f"
+            done) > /tmp/new_hashes.txt
+
+            # 分析差异
+            ADDED=""
+            MODIFIED=""
+            DELETED=""
+
+            # 注意：使用 grep -F 固定字符串匹配，避免路径中的 [id] 等方括号被当作正则字符类
+            while IFS=' ' read -r hash filepath; do
+              filepath="${filepath#./}"
+              old_hash=$(grep -F " ./${filepath}" /tmp/old_hashes.txt | cut -d' ' -f1 || true)
+              if [ -z "$old_hash" ]; then
+                ADDED="${ADDED}\"${filepath}\","
+                mkdir -p "$PATCH_DIR/$(dirname "$filepath")"
+                cp "$NEW_SERVER_DIR/$filepath" "$PATCH_DIR/$filepath"
+              elif [ "$hash" != "$old_hash" ]; then
+                MODIFIED="${MODIFIED}\"${filepath}\","
+                mkdir -p "$PATCH_DIR/$(dirname "$filepath")"
+                cp "$NEW_SERVER_DIR/$filepath" "$PATCH_DIR/$filepath"
+              fi
+            done < /tmp/new_hashes.txt
+
+            while IFS=' ' read -r hash filepath; do
+              filepath="${filepath#./}"
+              if ! grep -qF " ./${filepath}" /tmp/new_hashes.txt; then
+                DELETED="${DELETED}\"${filepath}\","
+              fi
+            done < /tmp/old_hashes.txt
+
+            # 强制将 manifest 文件加入 delta 包（即使 hash 没变）
+            FORCE_MANIFESTS=".next/routes-manifest.json .next/build-manifest.json .next/app-build-manifest.json .next/server/middleware-manifest.json .next/server/app-paths-manifest.json .next/prerender-manifest.json"
+            for mf in $FORCE_MANIFESTS; do
+              if [ -f "$NEW_SERVER_DIR/$mf" ]; then
+                # 检查是否已在 MODIFIED 或 ADDED 中
+                if ! echo "$MODIFIED$ADDED" | grep -q "\"${mf}\""; then
+                  MODIFIED="${MODIFIED}\"${mf}\","
+                  mkdir -p "$PATCH_DIR/$(dirname "$mf")"
+                  cp "$NEW_SERVER_DIR/$mf" "$PATCH_DIR/$mf"
+                fi
+              fi
+            done
+
+            # 强制将 build-manifest 引用的 static 资源加入 delta（跨平台构建 chunk hash 不同，必须包含）
+            echo "[Delta] 强制包含 manifest 引用的 static 资源..."
+            STATIC_FORCED=0
+            for manifest_file in .next/build-manifest.json .next/app-build-manifest.json; do
+              [ -f "$NEW_SERVER_DIR/$manifest_file" ] || continue
+              while IFS= read -r sf; do
+                full=".next/$sf"
+                [ -f "$NEW_SERVER_DIR/$full" ] || continue
+                if ! echo "$MODIFIED$ADDED" | grep -qF "\"${full}\""; then
+                  MODIFIED="${MODIFIED}\"${full}\","
+                fi
+                mkdir -p "$PATCH_DIR/$(dirname "$full")"
+                cp "$NEW_SERVER_DIR/$full" "$PATCH_DIR/$full"
+                STATIC_FORCED=$((STATIC_FORCED + 1))
+              done < <(jq -r '.. | strings | select(startswith("static/"))' "$NEW_SERVER_DIR/$manifest_file" | sort -u)
+            done
+            echo "[Delta] 强制包含 manifest 引用的 static 资源: ${STATIC_FORCED} 个"
+
+            ADDED=$(echo "[$ADDED]" | sed 's/,]/]/')
+            MODIFIED=$(echo "[$MODIFIED]" | sed 's/,]/]/')
+            DELETED=$(echo "[$DELETED]" | sed 's/,]/]/')
+
+            jq -n \
+              --arg from "$OLD_VERSION" \
+              --arg to "$NEW_VERSION" \
+              --argjson modified "$MODIFIED" \
+              --argjson added "$ADDED" \
+              --argjson deleted "$DELETED" \
+              '{from: $from, to: $to, modified: $modified, added: $added, deleted: $deleted}' \
+              > "$PATCH_DIR/__manifest.json"
+
+            echo "=== Patch Manifest ==="
+            cat "$PATCH_DIR/__manifest.json"
+
+            TOTAL_CHANGES=$(echo "$ADDED $MODIFIED $DELETED" | tr ',' '\n' | grep -c '"' || true)
+
+            if [ "$TOTAL_CHANGES" -gt 0 ]; then
+              PATCH_NAME="server-patch-${OLD_VERSION}-${NEW_VERSION}.tar.gz"
+              tar czf "$TMPDIR/${PATCH_NAME}" -C "$PATCH_DIR" .
+
+              PATCH_SIZE=$(stat -c%s "$TMPDIR/${PATCH_NAME}")
+
+              # 补丁大小异常检测：超过全量 tar.gz 的 80% 则跳过
+              THRESHOLD=$(( NEW_GZ_SIZE * 80 / 100 ))
+              if [ "$PATCH_SIZE" -gt "$THRESHOLD" ]; then
+                echo "Patch ${PATCH_NAME} (${PATCH_SIZE} bytes) exceeds 80% of full tar (${NEW_GZ_SIZE} bytes), skipping"
+                rm -f "$TMPDIR/${PATCH_NAME}"
+                rm -rf "$OLD_SERVER_DIR" "$PATCH_DIR"
+                continue
+              fi
+
+              PATCH_HASH=$(sha256sum "$TMPDIR/${PATCH_NAME}" | cut -d' ' -f1)
+              echo "Patch: ${PATCH_NAME}, size: ${PATCH_SIZE}, hash: ${PATCH_HASH}"
+
+              # 验证补丁完整性
+              gzip -t "$TMPDIR/${PATCH_NAME}" || { echo "ERROR: $(basename $TMPDIR/${PATCH_NAME}) integrity check failed!"; exit 1; }
+
+              # 上传 patch 到 Release
+              echo "Uploading ${PATCH_NAME}..."
+              upload_and_verify "$TMPDIR/${PATCH_NAME}" "$TAG"
+
+              # 累积到 DELTAS_JSON 数组
+              GH_BASE="https://github.com/YOUR_ORG/ssts/releases/download/${TAG}"
+              DELTAS_JSON=$(echo "$DELTAS_JSON" | jq \
+                --arg from "$OLD_VERSION" \
+                --arg url "${GH_BASE}/${PATCH_NAME}" \
+                --argjson size "$PATCH_SIZE" \
+                --arg hash "sha256:${PATCH_HASH}" \
+                '[.[] | select(.from != $from)] + [{ from: $from, url: $url, size: $size, hash: $hash }]')
+            else
+              echo "No changes detected between ${OLD_VERSION} and ${NEW_VERSION}, skipping"
+            fi
+
+            rm -rf "$OLD_SERVER_DIR" "$PATCH_DIR"
+          done
+
+          # 5. 检查是否有有效的 patch
+          PATCH_COUNT=$(echo "$DELTAS_JSON" | jq 'length')
+          echo ""
+          echo "--- Generated ${PATCH_COUNT} valid patch(es) ---"
+
+          if [ "$PATCH_COUNT" -eq 0 ]; then
+            echo "No valid patches generated, skipping latest.json update"
+            exit 0
+          fi
+
+          # 6. 更新 latest.json 注入 serverDeltas 和 serverFullUrl
+          echo "--- Updating latest.json ---"
+          gh release download "$TAG" --pattern "latest.json" --repo YOUR_ORG/ssts --clobber
+
+          # 生成更新说明（commit log）写入 latest.json 的 notes 字段
+          PREV_TAG=$(git tag --sort=-creatordate | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v "^${TAG}$" | head -1)
+          echo "PREV_TAG=${PREV_TAG}, TAG=${TAG}"
+          if [ -n "$PREV_TAG" ]; then
+            echo "Generating notes from ${PREV_TAG}..${TAG}"
+            NOTES=$(git log ${PREV_TAG}..${TAG} --pretty=format:"- %s" --no-merges 2>/dev/null | head -20 || true)
+          fi
+          if [ -z "$NOTES" ]; then
+            echo "No commits between tags, using current commit message"
+            NOTES=$(git log -1 --pretty=format:"- %s" 2>/dev/null || true)
+          fi
+          [ -z "$NOTES" ] && NOTES="版本更新"
+          echo "NOTES: $NOTES"
+
+          # 计算 server 全量包的 hash 和 size，用于 serverFullUrl
+          SERVER_FULL_SIZE=$(stat -c%s "$TMPDIR/${SERVER_TAR_NAME}" 2>/dev/null || stat -f%z "$TMPDIR/${SERVER_TAR_NAME}")
+          SERVER_FULL_HASH=$(sha256sum "$TMPDIR/${SERVER_TAR_NAME}" | cut -d' ' -f1)
+          GH_BASE="https://github.com/YOUR_ORG/ssts/releases/download/${TAG}"
+          SERVER_FULL_GH_URL="${GH_BASE}/${SERVER_TAR_NAME}"
+          SERVER_FULL_CDN_URL="https://${{ secrets.QINIU_CDN_DOMAIN }}/ssts/releases/${TAG}/${SERVER_TAR_NAME}"
+          echo "Server full tar: size=${SERVER_FULL_SIZE}, hash=${SERVER_FULL_HASH}"
+
+          jq --arg tv "$TAURI_VERSION" \
+             --arg sv "$NEW_VERSION" \
+             --argjson deltas "$DELTAS_JSON" \
+             --arg sfu_url "$SERVER_FULL_GH_URL" \
+             --arg sfu_cdn "$SERVER_FULL_CDN_URL" \
+             --argjson sfu_size "$SERVER_FULL_SIZE" \
+             --arg sfu_hash "sha256:${SERVER_FULL_HASH}" \
+             --arg notes "$NOTES" \
+             '
+             .version = $tv |
+             .serverVersion = $sv |
+             .notes = $notes |
+             .serverFullUrl = {
+               url: $sfu_url,
+               cdnUrl: $sfu_cdn,
+               size: $sfu_size,
+               hash: $sfu_hash
+             } |
+             .serverDeltas = {
+               "darwin-aarch64": $deltas,
+               "darwin-x86_64": $deltas,
+               "windows-x86_64": $deltas,
+               "linux-x86_64": $deltas
+             }
+             ' latest.json > latest-updated.json
+
+          mv latest-updated.json latest.json
+          upload_and_verify latest.json "$TAG"
+
+          echo "=== Patch generation complete ==="
+
+  release:
+    needs: [build, generate-delta]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes and publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+
+          # 生成自上个 tag 以来的 commit log 作为 release notes
+          PREV_TAG=$(git tag --sort=-creatordate | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v "^${TAG}$" | head -1)
+
+          if [ -n "$PREV_TAG" ]; then
+            NOTES=$(cat <<EOF
+          ## SSTS ${VERSION}
+
+          ### 变更内容
+          $(git log ${PREV_TAG}..${TAG} --pretty=format:"- %s" --no-merges)
+
+          ---
+          在下方 Assets 中下载对应平台的安装包。
+          EOF
+          )
+          else
+            NOTES=$(cat <<EOF
+          ## SSTS ${VERSION}
+
+          ### 变更内容
+          $(git log --pretty=format:"- %s" --no-merges -20)
+
+          ---
+          在下方 Assets 中下载对应平台的安装包。
+          EOF
+          )
+          fi
+
+          gh release edit "$TAG" --notes "$NOTES" --draft=false
+
+  # 同步 Release 到七牛云 CDN（加速国内下载）
+  sync-qiniu:
+    needs: [release, generate-delta]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name == 'push'
+    continue-on-error: true
+    steps:
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          echo "Version: ${VERSION}"
+
+      - name: Download assets from GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${{ steps.version.outputs.tag }}"
+          mkdir -p assets
+          cd assets
+          echo "--- Downloading all assets from GitHub Release ${TAG} ---"
+          gh release download "$TAG" --repo YOUR_ORG/ssts --clobber
+          echo "--- Downloaded files ---"
+          ls -lh
+
+      - name: Install qshell
+        run: |
+          set -e
+          echo "--- Installing qshell ---"
+          curl -fSL -o qshell.tar.gz https://github.com/qiniu/qshell/releases/download/v2.19.4/qshell-v2.19.4-linux-amd64.tar.gz
+          tar xzf qshell.tar.gz
+          chmod +x qshell
+          sudo mv qshell /usr/local/bin/qshell
+          qshell version
+
+      - name: Configure qshell
+        run: |
+          qshell account ${{ secrets.QINIU_ACCESS_KEY }} ${{ secrets.QINIU_SECRET_KEY }} ssts-ci
+
+      - name: Rewrite latest.json URLs for Qiniu
+        run: |
+          set -e
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          CDN_BASE="https://o09u11p5v.qnssl.com/ssts/releases/${VERSION}"
+          GH_BASE="https://github.com/YOUR_ORG/ssts/releases/download/${TAG}"
+
+          if [ ! -f assets/latest.json ]; then
+            echo "WARNING: latest.json not found, skipping URL rewrite"
+            exit 0
+          fi
+
+          echo "--- Rewriting latest.json URLs ---"
+          echo "GitHub base: ${GH_BASE}"
+          echo "CDN base:    ${CDN_BASE}"
+
+          jq --arg gb "$GH_BASE" --arg cdn "$CDN_BASE" '
+            walk(
+              if type == "object" and has("url") then
+                .url = (.url | sub($gb; $cdn))
+              else .
+              end
+            ) |
+            walk(
+              if type == "object" and has("signature") then
+                .signature = (.signature | sub($gb; $cdn))
+              else .
+              end
+            )
+          ' assets/latest.json > assets/latest-qiniu.json
+
+          mv assets/latest-qiniu.json assets/latest.json
+          echo "--- Rewritten latest.json ---"
+          cat assets/latest.json | jq .
+
+      - name: Upload all files to Qiniu
+        env:
+          QINIU_BUCKET: ${{ secrets.QINIU_BUCKET }}
+        run: |
+          set -e
+          VERSION="${{ steps.version.outputs.version }}"
+          FAIL=0
+          SUCCESS=0
+
+          upload_with_retry() {
+            local local_file="$1"
+            local key="$2"
+            local retries=3
+            local attempt=1
+            while [ $attempt -le $retries ]; do
+              echo "  Upload attempt ${attempt}/${retries}: ${key}"
+              if qshell fput "${QINIU_BUCKET}" "${key}" "${local_file}" --overwrite; then
+                echo "  OK: ${key}"
+                return 0
+              fi
+              echo "  Attempt ${attempt} failed"
+              attempt=$((attempt + 1))
+              sleep 5
+            done
+            echo "  FAIL: ${key}"
+            return 1
+          }
+
+          echo "--- Uploading assets to Qiniu (ssts/releases/${VERSION}/) ---"
+          cd assets
+          for file in *; do
+            [ -f "$file" ] || continue
+            KEY="ssts/releases/${VERSION}/${file}"
+            if upload_with_retry "$file" "$KEY"; then
+              SUCCESS=$((SUCCESS + 1))
+            else
+              FAIL=$((FAIL + 1))
+            fi
+          done
+
+          # 额外上传 latest.json 到固定路径（客户端检查更新用）
+          if [ -f "latest.json" ]; then
+            echo "--- Uploading latest.json to ssts/latest.json ---"
+            if upload_with_retry "latest.json" "ssts/latest.json"; then
+              SUCCESS=$((SUCCESS + 1))
+            else
+              FAIL=$((FAIL + 1))
+            fi
+          fi
+
+          cd ..
+          echo "=== Qiniu upload complete: ${SUCCESS} OK, ${FAIL} FAIL ==="
+          if [ $FAIL -gt 0 ]; then
+            echo "WARNING: ${FAIL} file(s) failed to upload to Qiniu"
+          fi
+
+      - name: Refresh Qiniu CDN cache
+        if: success()
+        run: |
+          echo "=== Refreshing CDN cache for latest.json ==="
+          echo "https://o09u11p5v.qnssl.com/ssts/latest.json" > /tmp/cdn_refresh_urls.txt
+          qshell cdnrefresh --urls -i /tmp/cdn_refresh_urls.txt || echo "WARNING: CDN refresh failed, cache will expire naturally"
+          echo "CDN cache refresh requested"

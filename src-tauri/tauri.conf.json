@@ -1,0 +1,63 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
+  "productName": "SSTS",
+  "version": "0.1.0",
+  "identifier": "com.ssts.desktop",
+  "build": {
+    "beforeBuildCommand": "node scripts/bundle-sidecar.js",
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:3100",
+    "frontendDist": "./frontend"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600,
+        "titleBarStyle": "Overlay",
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": "all",
+    "resources": [
+      "splash.html",
+      "icons/icon.png",
+      "server/server.js",
+      "server/package.json",
+      "server/.next/**/*",
+      "server/node_modules/**/*"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRGNTk2NTc4MDYxOUJFQUYKUldTdnZoa0dlR1ZaVDcwWVVuQ29Fd2szSVhyRmFUeG1sUUVudWU4ek10eWE1dk95d0VHRDBIblAK",
+      "endpoints": [
+        "https://example.com/ssts/latest.json?v={{current_version}}",
+        "https://example.com/ssts/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}
