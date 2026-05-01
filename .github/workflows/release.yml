@@ -127,11 +127,11 @@ jobs:
 
             while [ $attempt -le $max_retries ]; do
               echo "Upload attempt $attempt/$max_retries: $basename"
-              gh release upload "$tag" "$file" --repo YOUR_ORG/ssts --clobber
+              gh release upload "$tag" "$file" --repo ggtiger/SSTS --clobber
 
               # 回验：从 GitHub 重新下载并校验
               local verify_dir=$(mktemp -d)
-              gh release download "$tag" --repo YOUR_ORG/ssts --pattern "$basename" --dir "$verify_dir"
+              gh release download "$tag" --repo ggtiger/SSTS --pattern "$basename" --dir "$verify_dir"
 
               if [[ "$basename" == *.tar.gz ]]; then
                 if gzip -t "$verify_dir/$basename" 2>/dev/null; then
@@ -169,7 +169,7 @@ jobs:
 
           # 1. 从当前 Release 的全量包中提取 server
           echo "--- Extracting server from current release ---"
-          gh release download "$TAG" --repo YOUR_ORG/ssts \
+          gh release download "$TAG" --repo ggtiger/SSTS \
             --pattern "*.app.tar.gz" --dir "$TMPDIR/current" || true
 
           APP_TAR=$(ls "$TMPDIR/current"/*.app.tar.gz 2>/dev/null | head -1 || true)
@@ -216,7 +216,7 @@ jobs:
 
             # v* tag 需要从 Release 资产中查找实际 server 版本
             PROBE_DIR=$(mktemp -d)
-            if gh release download "$PREV_TAG" --repo YOUR_ORG/ssts \
+            if gh release download "$PREV_TAG" --repo ggtiger/SSTS \
               --pattern "server-*.tar.gz" --dir "$PROBE_DIR" 2>/dev/null; then
               FOUND_TAR=$(ls -1 "$PROBE_DIR"/server-*.tar.gz 2>/dev/null | grep -v 'patch' | head -1)
               if [ -n "$FOUND_TAR" ]; then
@@ -238,13 +238,13 @@ jobs:
             mkdir -p "$OLD_WORKDIR"
 
             # 优先从 Release 下载旧版本的 server tar
-            gh release download "$PREV_TAG" --repo YOUR_ORG/ssts \
+            gh release download "$PREV_TAG" --repo ggtiger/SSTS \
               --pattern "server-${OLD_VERSION}.tar.gz" --dir "$OLD_WORKDIR" 2>/dev/null || true
 
             if [ ! -f "$OLD_WORKDIR/server-${OLD_VERSION}.tar.gz" ]; then
               # 回退：从旧版本的全量包中提取 server
               echo "No standalone server tar for ${PREV_TAG}, extracting from app bundle..."
-              gh release download "$PREV_TAG" --repo YOUR_ORG/ssts \
+              gh release download "$PREV_TAG" --repo ggtiger/SSTS \
                 --pattern "*.app.tar.gz" --dir "$OLD_WORKDIR" 2>/dev/null || true
 
               OLD_APP_TAR=$(ls "$OLD_WORKDIR"/*.app.tar.gz 2>/dev/null | head -1 || true)
@@ -388,7 +388,7 @@ jobs:
               upload_and_verify "$TMPDIR/${PATCH_NAME}" "$TAG"
 
               # 累积到 DELTAS_JSON 数组
-              GH_BASE="https://github.com/YOUR_ORG/ssts/releases/download/${TAG}"
+              GH_BASE="https://github.com/ggtiger/SSTS/releases/download/${TAG}"
               DELTAS_JSON=$(echo "$DELTAS_JSON" | jq \
                 --arg from "$OLD_VERSION" \
                 --arg url "${GH_BASE}/${PATCH_NAME}" \
@@ -414,7 +414,7 @@ jobs:
 
           # 6. 更新 latest.json 注入 serverDeltas 和 serverFullUrl
           echo "--- Updating latest.json ---"
-          gh release download "$TAG" --pattern "latest.json" --repo YOUR_ORG/ssts --clobber
+          gh release download "$TAG" --pattern "latest.json" --repo ggtiger/SSTS --clobber
 
           # 生成更新说明（commit log）写入 latest.json 的 notes 字段
           PREV_TAG=$(git tag --sort=-creatordate | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v "^${TAG}$" | head -1)
@@ -433,7 +433,7 @@ jobs:
           # 计算 server 全量包的 hash 和 size，用于 serverFullUrl
           SERVER_FULL_SIZE=$(stat -c%s "$TMPDIR/${SERVER_TAR_NAME}" 2>/dev/null || stat -f%z "$TMPDIR/${SERVER_TAR_NAME}")
           SERVER_FULL_HASH=$(sha256sum "$TMPDIR/${SERVER_TAR_NAME}" | cut -d' ' -f1)
-          GH_BASE="https://github.com/YOUR_ORG/ssts/releases/download/${TAG}"
+          GH_BASE="https://github.com/ggtiger/SSTS/releases/download/${TAG}"
           SERVER_FULL_GH_URL="${GH_BASE}/${SERVER_TAR_NAME}"
           SERVER_FULL_CDN_URL="https://${{ secrets.QINIU_CDN_DOMAIN }}/ssts/releases/${TAG}/${SERVER_TAR_NAME}"
           echo "Server full tar: size=${SERVER_FULL_SIZE}, hash=${SERVER_FULL_HASH}"
@@ -540,7 +540,7 @@ jobs:
           mkdir -p assets
           cd assets
           echo "--- Downloading all assets from GitHub Release ${TAG} ---"
-          gh release download "$TAG" --repo YOUR_ORG/ssts --clobber
+          gh release download "$TAG" --repo ggtiger/SSTS --clobber
           echo "--- Downloaded files ---"
           ls -lh
 
@@ -564,7 +564,7 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           TAG="${{ steps.version.outputs.tag }}"
           CDN_BASE="https://o09u11p5v.qnssl.com/ssts/releases/${VERSION}"
-          GH_BASE="https://github.com/YOUR_ORG/ssts/releases/download/${TAG}"
+          GH_BASE="https://github.com/ggtiger/SSTS/releases/download/${TAG}"
 
           if [ ! -f assets/latest.json ]; then
             echo "WARNING: latest.json not found, skipping URL rewrite"

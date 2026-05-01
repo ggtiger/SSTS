@@ -1405,7 +1405,7 @@ pub fn run() {
                     println!("[GClaw] Dev mode");
                     app.manage(ServerState {
                         child: Mutex::new(None),
-                        port: 3100,
+                        port: 3200,
                     });
 
                     // Dev 模式自动打开 DevTools
@@ -1418,12 +1418,12 @@ pub fn run() {
                     std::thread::spawn(move || {
                         splash_update(&h, "正在连接服务...", 30, "");
 
-                        wait_for_server(3100);
+                        wait_for_server(3200);
 
                         splash_update(&h, "即将就绪...", 100, "");
                         // 强制导航，防止 devUrl 首次加载失败
                         if let Some(main) = h.get_webview_window("main") {
-                            let _ = main.navigate("http://localhost:3100".parse().unwrap());
+                            let _ = main.navigate("http://localhost:3200".parse().unwrap());
                         }
                         // 等待前端 app_ready 或超时
                         finalize_launch(&h, 15);
