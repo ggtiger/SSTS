@@ -570,6 +570,38 @@ jobs:
 
           echo "=== Upload to ${LATEST_APP_TAG} complete ==="
 
+      # 上传完成后，更新 Release Notes 追加热更新变更说明
+      - name: Update release notes with server changes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          RELEASE_TAG="${{ steps.app_release.outputs.app_tag }}"
+
+          # 生成热更新变更说明
+          PREV_TAG=$(git tag --sort=-creatordate | grep -E '^server-v[0-9]+' | grep -v "^${TAG}$" | head -1)
+          if [ -n "$PREV_TAG" ]; then
+            SERVER_NOTES=$(git log ${PREV_TAG}..${TAG} --pretty=format:"- %s" --no-merges || true)
+          else
+            SERVER_NOTES="- 热更新首次发布"
+          fi
+          [ -z "$SERVER_NOTES" ] && SERVER_NOTES="- 热更新版本更新"
+
+          echo "Server notes:"
+          echo "$SERVER_NOTES"
+
+          # 获取当前 Release Notes 并追加
+          CURRENT_NOTES=$(gh release view "$RELEASE_TAG" --json body -q '.body' || echo "")
+
+          UPDATED_NOTES="${CURRENT_NOTES}"$'\n\n'
+          UPDATED_NOTES+="### Server 热更新 ${VERSION}"$'\n'
+          UPDATED_NOTES+="${SERVER_NOTES}"
+
+          gh release edit "$RELEASE_TAG" --notes "$UPDATED_NOTES"
+
+          echo "Release notes updated for ${RELEASE_TAG}"
+
   # Job 2: 同步到七牛云 CDN（国内加速）
   sync-qiniu:
     needs: build-and-delta
@@ -644,7 +676,7 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           LATEST_APP_TAG="${{ steps.app_release.outputs.app_tag }}"
           GH_BASE="https://github.com/${{ github.repository }}/releases/download/${LATEST_APP_TAG}"
-          CDN_BASE="https://o09u11p5v.qnssl.com/ssts/releases/${VERSION}"
+          CDN_BASE="http://o09u11p5v.qnssl.com/ssts/releases/${VERSION}"
 
           if [ -f "dist/qiniu/latest.json" ]; then
             jq --arg gb "$GH_BASE" --arg cdn "$CDN_BASE" '
@@ -721,6 +753,6 @@ jobs:
         if: success()
         run: |
           echo "=== Refreshing CDN cache for latest.json ==="
-          echo "https://o09u11p5v.qnssl.com/ssts/latest.json" > /tmp/cdn_refresh_urls.txt
+          echo "http://o09u11p5v.qnssl.com/ssts/latest.json" > /tmp/cdn_refresh_urls.txt
           qshell cdnrefresh --urls -i /tmp/cdn_refresh_urls.txt || echo "WARNING: CDN refresh failed, cache will expire naturally"
           echo "CDN cache refresh requested"

@@ -80,7 +80,10 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'SSTS ${{ github.ref_name }}'
-          releaseBody: '在下方 Assets 中下载对应平台的安装包。'
+          releaseBody: |
+            ## SSTS ${{ github.ref_name }}
+
+            正在构建中，请稍候...
           releaseDraft: true
           prerelease: false
           tauriScript: npx tauri
@@ -487,34 +490,41 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           VERSION="${TAG#v}"
 
-          # 生成自上个 tag 以来的 commit log 作为 release notes
+          # 获取上一个 tag
           PREV_TAG=$(git tag --sort=-creatordate | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v "^${TAG}$" | head -1)
 
           if [ -n "$PREV_TAG" ]; then
-            NOTES=$(cat <<EOF
-          ## SSTS ${VERSION}
+            # 收集 commits
+            ALL_COMMITS=$(git log ${PREV_TAG}..${TAG} --pretty=format:"- %s" --no-merges || true)
 
-          ### 变更内容
-          $(git log ${PREV_TAG}..${TAG} --pretty=format:"- %s" --no-merges)
-
-          ---
-          在下方 Assets 中下载对应平台的安装包。
-          EOF
-          )
+            NOTES="## SSTS ${VERSION}"$'\n\n'
+            NOTES+="### 变更内容"$'\n'
+            NOTES+="${ALL_COMMITS}"$'\n\n'
+            NOTES+="---"$'\n'
+            NOTES+="[完整变更](https://github.com/ggtiger/SSTS/compare/${PREV_TAG}...${TAG})"$'\n\n'
+            NOTES+="在下方 Assets 中下载对应平台的安装包。"
           else
-            NOTES=$(cat <<EOF
-          ## SSTS ${VERSION}
-
-          ### 变更内容
-          $(git log --pretty=format:"- %s" --no-merges -20)
-
-          ---
-          在下方 Assets 中下载对应平台的安装包。
-          EOF
-          )
+            NOTES="## SSTS ${VERSION}"$'\n\n'
+            NOTES+="首次发布"$'\n\n'
+            NOTES+="---"$'\n'
+            NOTES+="在下方 Assets 中下载对应平台的安装包。"
           fi
 
-          gh release edit "$TAG" --notes "$NOTES" --draft=false
+          echo "Generated notes:"
+          echo "$NOTES"
+
+          echo "DEBUG: Current release status:"
+          gh release view "$TAG" --json isDraft,tagName -q '{isDraft: .isDraft, tag: .tagName}' || echo "Release not found"
+
+          gh release edit "$TAG" --notes "$NOTES" --draft=false || {
+            echo "ERROR: gh release edit failed, trying alternative..."
+            # 备选方案：删除 draft 重新创建
+            gh release delete "$TAG" --yes || true
+            gh release create "$TAG" --title "SSTS ${VERSION}" --notes "$NOTES" --verify-tag
+          }
+
+          echo "DEBUG: Updated release status:"
+          gh release view "$TAG" --json isDraft -q '.isDraft'
 
   # 同步 Release 到七牛云 CDN（加速国内下载）
   sync-qiniu:
@@ -564,7 +574,7 @@ jobs:
           set -e
           VERSION="${{ steps.version.outputs.version }}"
           TAG="${{ steps.version.outputs.tag }}"
-          CDN_BASE="https://o09u11p5v.qnssl.com/ssts/releases/${VERSION}"
+          CDN_BASE="http://o09u11p5v.qnssl.com/ssts/releases/${VERSION}"
           GH_BASE="https://github.com/ggtiger/SSTS/releases/download/${TAG}"
 
           if [ ! -f assets/latest.json ]; then
@@ -655,6 +665,6 @@ jobs:
         if: success()
         run: |
           echo "=== Refreshing CDN cache for latest.json ==="
-          echo "https://o09u11p5v.qnssl.com/ssts/latest.json" > /tmp/cdn_refresh_urls.txt
+          echo "http://o09u11p5v.qnssl.com/ssts/latest.json" > /tmp/cdn_refresh_urls.txt
           qshell cdnrefresh --urls -i /tmp/cdn_refresh_urls.txt || echo "WARNING: CDN refresh failed, cache will expire naturally"
           echo "CDN cache refresh requested"
