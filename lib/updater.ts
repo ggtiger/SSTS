@@ -264,8 +264,11 @@ export async function checkServerDelta(): Promise<ServerUpdateInfo | null> {
 
     const serverVersion = latestJson.serverVersion as string | undefined
     if (!serverVersion || !isVersionNewer(serverVersion, currentVersion)) {
+      console.log(`[Delta] 本地 server: ${currentVersion}, 远程 server: ${serverVersion ?? 'N/A'}, 需更新: false`)
       return null
     }
+
+    console.log(`[Delta] 本地 server: ${currentVersion}, 远程 server: ${serverVersion}, 需更新: ${isVersionNewer(serverVersion, currentVersion)}`)
 
     const notes = (latestJson.notes as string) || undefined
     const deltas = latestJson.serverDeltas as Record<string, ServerDelta[]> | undefined

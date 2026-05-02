@@ -50,6 +50,13 @@ jobs:
           mv package.json.tmp package.json
           echo "Updated package.json version to ${VERSION}"
 
+          # 同步更新 src-tauri/server/package.json
+          if [ -f "src-tauri/server/package.json" ]; then
+            jq --arg v "$VERSION" '.version = $v' src-tauri/server/package.json > src-tauri/server/package.json.tmp
+            mv src-tauri/server/package.json.tmp src-tauri/server/package.json
+            echo "Updated src-tauri/server/package.json to version ${VERSION}"
+          fi
+
       # 构建 Next.js standalone 产物
       - name: Build Next.js
         run: npm run build

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { isTauri } from '@/lib/tauri'
-import { checkForUpdate } from '@/lib/updater'
+import { checkForUpdate, getCurrentServerVersion } from '@/lib/updater'
 import { useUpdaterStore } from '@/lib/store'
 
 interface SettingsData {
@@ -41,6 +41,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [settings, setSettings] = useState<SettingsData>(DEFAULT_SETTINGS)
   const [activeTab, setActiveTab] = useState<'connection' | 'display' | 'about'>('connection')
   const [appVersion, setAppVersion] = useState('0.1.1')
+  const [serverVersion, setServerVersion] = useState('--')
   const [checkingUpdate, setCheckingUpdate] = useState(false)
   const [checkResult, setCheckResult] = useState<'latest' | 'error' | null>(null)
   const resultTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -70,6 +71,12 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
         }
       } catch {
         // 非 Tauri 环境，使用默认值
+      }
+      try {
+        const sv = await getCurrentServerVersion()
+        if (sv && sv !== 'unknown') setServerVersion(sv)
+      } catch {
+        // 获取 server 版本失败，保持默认
       }
     })()
   }, [])
@@ -218,8 +225,10 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                 </div>
               </div>
               <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-slate-600">
-                <span className="text-slate-400">版本</span>
+                <span className="text-slate-400">应用版本</span>
                 <span className="font-mono">{appVersion}</span>
+                <span className="text-slate-400">Server 版本</span>
+                <span className="font-mono">{serverVersion}</span>
                 <span className="text-slate-400">框架</span>
                 <span>Tauri + Next.js</span>
                 <span className="text-slate-400">技术支持</span>
