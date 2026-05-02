@@ -20,19 +20,10 @@ const navItems = [
 export default function TopAppBar() {
   const pathname = usePathname()
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [isWindows, setIsWindows] = useState(false)
   const setAvailable = useUpdaterStore((s) => s.setAvailable)
   const setServerReady = useUpdaterStore((s) => s.setServerReady)
   const showServerUpdatedToast = useUpdaterStore((s) => s.showServerUpdatedToast)
   const updaterRef = useRef<AutoUpdater | null>(null)
-
-  useEffect(() => {
-    const isWin = navigator.userAgent.includes('Windows')
-    const isDev =
-      typeof window !== 'undefined' &&
-      new URLSearchParams(window.location.search).has('show-windows-controls')
-    setIsWindows(isWin || isDev)
-  }, [])
 
   useEffect(() => {
     const updater = new AutoUpdater()
@@ -87,7 +78,7 @@ export default function TopAppBar() {
           })}
         </nav>
       </div>
-      <div className={`flex items-center gap-4${isWindows ? ' pr-[140px]' : ''}`}>
+      <div className="flex items-center gap-4">
         <button
           className="p-2 hover:bg-slate-50 transition-colors active:opacity-80 duration-150 rounded-full"
           onClick={() => setSettingsOpen(true)}
