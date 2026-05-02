@@ -39,9 +39,14 @@ export default function UpdateNotification() {
     }
   }, [setError])
 
-  const handleManualDownload = useCallback(() => {
+  const handleManualDownload = useCallback(async () => {
     if (updateInfo?.downloadUrl) {
-      window.open(updateInfo.downloadUrl, '_blank')
+      try {
+        const { openUrl } = await import('@tauri-apps/plugin-opener')
+        await openUrl(updateInfo.downloadUrl)
+      } catch (e) {
+        console.error('[Updater] 打开下载链接失败:', e)
+      }
     }
     dismiss()
   }, [updateInfo, dismiss])
