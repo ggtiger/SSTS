@@ -72,15 +72,19 @@ pub async fn restart_server(app: tauri::AppHandle) -> Result<String, String> {
 /// 校验文件 SHA-256 hash
 #[tauri::command]
 pub async fn verify_file_hash(path: String, expected_hash: String) -> Result<bool, String> {
+    delta_log(&format!("[Delta] verify_file_hash: 文件={}, 期望哈希={}", path, expected_hash));
     let actual = sha256_file(Path::new(&path))?;
     // 支持 "sha256:xxx" 和裸 hash 两种格式
     let expected = expected_hash.strip_prefix("sha256:").unwrap_or(&expected_hash);
-    Ok(actual == expected)
+    let matched = actual == expected;
+    delta_log(&format!("[Delta] verify_file_hash 结果: matched={}, actual_hash={}", matched, actual));
+    Ok(matched)
 }
 
 /// 通过 curl 获取远程 JSON（绕过浏览器 CORS 限制）
 #[tauri::command]
 pub async fn fetch_url(url: String) -> Result<String, String> {
+    delta_log(&format!("[Delta] fetch_url 请求: {}", url));
     let curl = if cfg!(target_os = "windows") { "curl.exe" } else { "curl" };
     let mut cmd = Command::new(curl);
     cmd.args(&["-sL", "--connect-timeout", "15", "--max-time", "30"]);
@@ -92,18 +96,28 @@ pub async fn fetch_url(url: String) -> Result<String, String> {
     cmd.arg(&url);
 
     let output = cmd.output()
-        .map_err(|e| format!("执行 curl 失败: {}", e))?;
+        .map_err(|e| {
+            delta_log(&format!("[Delta] fetch_url curl 执行失败: {} | URL: {}", e, url));
+            format!("执行 curl 失败: {}", e)
+        })?;
 
     if !output.status.success() {
-        return Err(format!("curl 返回错误: {}", String::from_utf8_lossy(&output.stderr)));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        delta_log(&format!("[Delta] fetch_url curl 返回错误: status={}, stderr={} | URL: {}", output.status, stderr, url));
+        return Err(format!("curl 返回错误: {}", stderr));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    let body = String::from_utf8_lossy(&output.stdout).into_owned();
+    let truncated = if body.len() > 500 { &body[..500] } else { &body };
+    delta_log(&format!("[Delta] fetch_url 响应: {} chars, 内容: {}{}" , body.len(), truncated, if body.len() > 500 { "...(truncated)" } else { "" }));
+
+    Ok(body)
 }
 
 /// 通过 curl 下载文件到指定路径（绕过浏览器 CORS 限制）
 #[tauri::command]
 pub async fn download_file(url: String, path: String) -> Result<(), String> {
+    delta_log(&format!("[Delta] download_file 开始: URL={}, 目标路径={}", url, path));
     let curl = if cfg!(target_os = "windows") { "curl.exe" } else { "curl" };
     let mut cmd = Command::new(curl);
     cmd.args(&["-sL", "-f", "--connect-timeout", "30", "--max-time", "300"]);
@@ -116,12 +130,23 @@ pub async fn download_file(url: String, path: String) -> Result<(), String> {
     cmd.arg(&url);
 
     let output = cmd.output()
-        .map_err(|e| format!("执行 curl 失败: {}", e))?;
+        .map_err(|e| {
+            delta_log(&format!("[Delta] download_file curl 执行失败: {} | URL: {}", e, url));
+            format!("执行 curl 失败: {}", e)
+        })?;
 
     if !output.status.success() {
         // 清理不完整的文件
         let _ = fs::remove_file(&path);
-        return Err(format!("下载失败: {}", String::from_utf8_lossy(&output.stderr)));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        delta_log(&format!("[Delta] download_file 失败: status={}, stderr={} | URL: {}", output.status, stderr, url));
+        return Err(format!("下载失败: {}", stderr));
+    }
+
+    // 记录下载文件大小
+    match fs::metadata(&path) {
+        Ok(meta) => delta_log(&format!("[Delta] download_file 完成: 文件大小={} bytes, 路径={}", meta.len(), path)),
+        Err(_) => delta_log(&format!("[Delta] download_file 完成: 无法读取文件大小, 路径={}", path)),
     }
 
     Ok(())

@@ -1,12 +1,13 @@
 "use client"
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { usePathname } from 'next/navigation'
 import Link from 'next/link'
+import { invoke } from '@tauri-apps/api/core'
 import { WindowControls } from './WindowControls'
 import SettingsModal from './SettingsModal'
 import UpdateNotification from './UpdateNotification'
-import { AutoUpdater } from '@/lib/updater'
+import { AutoUpdater, checkServerDelta, checkForUpdate } from '@/lib/updater'
 import { useUpdaterStore } from '@/lib/store'
 
 const navItems = [
@@ -20,10 +21,35 @@ const navItems = [
 export default function TopAppBar() {
   const pathname = usePathname()
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const setAvailable = useUpdaterStore((s) => s.setAvailable)
   const setServerReady = useUpdaterStore((s) => s.setServerReady)
   const showServerUpdatedToast = useUpdaterStore((s) => s.showServerUpdatedToast)
   const updaterRef = useRef<AutoUpdater | null>(null)
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setContextMenu({ x: e.clientX, y: e.clientY })
+  }, [])
+
+  const closeMenu = useCallback(() => setContextMenu(null), [])
+
+  // Close on Escape key
+  useEffect(() => {
+    if (!contextMenu) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeMenu() }
+    const onClick = () => closeMenu()
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('click', onClick)
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('click', onClick) }
+  }, [contextMenu, closeMenu])
+
+  const menuItems = [
+    { label: '刷新页面', action: () => window.location.reload() },
+    { label: '开发者工具', action: () => invoke('open_devtools') },
+    { label: '检查热更新', action: () => checkServerDelta() },
+    { label: '检查全量更新', action: () => checkForUpdate() },
+  ]
 
   useEffect(() => {
     const updater = new AutoUpdater()
@@ -50,8 +76,9 @@ export default function TopAppBar() {
 
   return (
     <header
-      className="flex-shrink-0 z-50 flex items-center justify-between px-6 h-16 w-full bg-white border-b border-slate-200 shadow-sm font-inter text-body-md text-primary antialiased select-none draggable-region"
+      className="flex-shrink-0 z-50 flex items-center justify-between px-6 h-16 w-full bg-white border-b border-slate-200 shadow-sm font-inter text-body-md text-primary antialiased select-none draggable-region relative"
       data-tauri-drag-region
+      onContextMenu={handleContextMenu}
     >
       <div className="flex items-center gap-8">
         <span className="text-lg font-black text-primary tracking-tighter flex items-center">
@@ -89,6 +116,23 @@ export default function TopAppBar() {
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <UpdateNotification />
       <WindowControls />
+      {contextMenu && (
+        <div
+          className="fixed z-[9999] min-w-[160px] rounded-lg bg-slate-800 border border-slate-700 shadow-xl py-1 text-sm text-slate-100"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {menuItems.map((item) => (
+            <button
+              key={item.label}
+              className="w-full text-left px-4 py-2 hover:bg-slate-700 transition-colors"
+              onClick={() => { item.action(); closeMenu() }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
     </header>
   )
 }

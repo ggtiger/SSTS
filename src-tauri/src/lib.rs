@@ -49,7 +49,7 @@ fn create_splash_window(handle: &tauri::AppHandle) -> Option<tauri::WebviewWindo
     let url: tauri::Url = match splash_url_str.parse() {
         Ok(u) => u,
         Err(e) => {
-            eprintln!("[GClaw] Failed to parse splash URL: {}", e);
+            eprintln!("[VACDevice] Failed to parse splash URL: {}", e);
             return None;
         }
     };
@@ -68,11 +68,11 @@ fn create_splash_window(handle: &tauri::AppHandle) -> Option<tauri::WebviewWindo
     .visible(false)  // 先隐藏，等页面加载完再显示，避免黑屏闪烁
     .build() {
         Ok(w) => {
-            println!("[GClaw] Splash window created (hidden until page loaded)");
+            println!("[VACDevice] Splash window created (hidden until page loaded)");
             Some(w)
         }
         Err(e) => {
-            eprintln!("[GClaw] Failed to create splash window: {}", e);
+            eprintln!("[VACDevice] Failed to create splash window: {}", e);
             None
         }
     }
@@ -128,12 +128,12 @@ fn init_startup_log(app: &tauri::AppHandle) {
     let data_dir = app.path().app_data_dir()
         .expect("Failed to get app data dir");
     std::fs::create_dir_all(&data_dir).ok();
-    STARTUP_LOG_PATH.set(data_dir.join("gclaw-startup.log")).ok();
+    STARTUP_LOG_PATH.set(data_dir.join("vacdevice-startup.log")).ok();
 }
 
 /// 写入启动日志（append，带时间戳）
 pub fn startup_log(msg: &str) {
-    println!("[GClaw] {}", msg);
+    println!("[VACDevice] {}", msg);
     if let Some(path) = STARTUP_LOG_PATH.get() {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -516,7 +516,7 @@ fn verify_python(python_path: &str) -> bool {
             let out = String::from_utf8_lossy(&output.stdout);
             let ok = output.status.success() && out.contains("Python");
             if !ok {
-                println!("[GClaw] Python verification failed for {}: {}", python_path, out.trim());
+                println!("[VACDevice] Python verification failed for {}: {}", python_path, out.trim());
             }
             ok
         }
@@ -677,7 +677,7 @@ fn download_runtime(
     if name == "git" && check_bin.exists() {
         let bash_exe = target_dir.join("bin").join("bash.exe");
         if !bash_exe.exists() {
-            println!("[GClaw] Git found but bash.exe missing (old MinGit?), re-downloading PortableGit...");
+            println!("[VACDevice] Git found but bash.exe missing (old MinGit?), re-downloading PortableGit...");
             std::fs::remove_dir_all(&target_dir).ok();
         }
     }
@@ -686,17 +686,17 @@ fn download_runtime(
     if name == "python" && !check_bin.exists() && cfg!(target_os = "windows") {
         let old_bin = target_dir.join("bin").join("python.exe");
         if old_bin.exists() {
-            println!("[GClaw] Python old layout detected (bin/python.exe), re-downloading...");
+            println!("[VACDevice] Python old layout detected (bin/python.exe), re-downloading...");
             std::fs::remove_dir_all(&target_dir).ok();
         }
     }
 
     if check_bin.exists() {
-        println!("[GClaw] {} already exists, skip download", label);
+        println!("[VACDevice] {} already exists, skip download", label);
         return Ok(());
     }
 
-    let temp_dir = std::env::temp_dir().join(format!("gclaw-dl-{}", name));
+    let temp_dir = std::env::temp_dir().join(format!("vacdevice-dl-{}", name));
     std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
 
     // 检查 curl 是否可用
@@ -717,7 +717,7 @@ fn download_runtime(
     // 获取总大小
     let total = get_remote_size(url);
     let total_mb = total as f64 / 1024.0 / 1024.0;
-    println!("[GClaw] Downloading {} from {} ({:.1} MB)", label, url, total_mb);
+    println!("[VACDevice] Downloading {} from {} ({:.1} MB)", label, url, total_mb);
 
     splash_update(app, &format!("正在下载 {}...", label), 0,
         &format!("{:.1} MB", total_mb));
@@ -847,7 +847,7 @@ fn download_runtime(
     std::fs::remove_dir_all(&temp_dir).ok();
 
     splash_check(app, name, "ok");
-    println!("[GClaw] {} installed successfully", label);
+    println!("[VACDevice] {} installed successfully", label);
     Ok(())
 }
 
@@ -905,7 +905,7 @@ fn sync_bundled_skills(bundled: &std::path::Path, target: &std::path::Path) {
             } else {
                 std::fs::copy(&src, &dest).ok();
             }
-            println!("[GClaw] Synced bundled skill: {}", name.to_string_lossy());
+            println!("[VACDevice] Synced bundled skill: {}", name.to_string_lossy());
         }
     }
 }
@@ -991,7 +991,7 @@ pub fn start_server_process(app: &tauri::AppHandle) -> (Child, u16) {
         {
             let python3_exe = runtime_python.parent().unwrap().join("python3.exe");
             if !python3_exe.exists() {
-                println!("[GClaw] Creating python3.exe alias for Windows compatibility");
+                println!("[VACDevice] Creating python3.exe alias for Windows compatibility");
                 let _ = std::fs::copy(&runtime_python, &python3_exe);
             }
         }
@@ -1110,6 +1110,18 @@ fn start_server(app: &tauri::AppHandle) -> (Child, u16) {
 
 // ============ Tauri Commands ============
 
+#[tauri::command]
+fn open_devtools(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.open_devtools();
+    }
+}
+
+#[tauri::command]
+fn write_log(message: String) {
+    startup_log(&message);
+}
+
 /// 前端调用：将二进制数据写入指定路径（配合 dialog 插件使用）
 #[tauri::command]
 fn save_file_content(path: String, content: Vec<u8>) -> Result<(), String> {
@@ -1152,7 +1164,7 @@ fn navigate_to(path: String, state: tauri::State<ServerState>, app: tauri::AppHa
 /// 前端页面渲染完成后调用，关闭 splash 并显示主窗口
 #[tauri::command]
 fn app_ready(app: tauri::AppHandle) {
-    println!("[GClaw] Frontend signaled ready");
+    println!("[VACDevice] Frontend signaled ready");
     if let Some(splash) = app.get_webview_window("splash") {
         let _ = splash.close();
     }
@@ -1166,7 +1178,7 @@ fn app_ready(app: tauri::AppHandle) {
 fn run_production_startup(handle: &tauri::AppHandle) {
     // 初始化启动日志
     init_startup_log(handle);
-    startup_log("=== GClaw startup ===");
+    startup_log("=== VACDevice startup ===");
     startup_log(&format!("Platform: {}-{}", platform_name(), std::env::consts::ARCH));
 
     // 重置 splash 状态（重试时需要）
@@ -1287,7 +1299,7 @@ fn finalize_launch(handle: &tauri::AppHandle, timeout_secs: u64) {
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
     // 超时兜底：强制关闭 splash 并显示主窗口
-    println!("[GClaw] finalize_launch timeout, forcing transition");
+    println!("[VACDevice] finalize_launch timeout, forcing transition");
     if let Some(splash) = handle.get_webview_window("splash") {
         let _ = splash.close();
     }
@@ -1349,7 +1361,7 @@ pub fn run() {
             if webview.label() == "splash" {
                 if let tauri::webview::PageLoadEvent::Finished = payload.event() {
                     let _ = webview.window().show();
-                    println!("[GClaw] Splash page loaded, window shown");
+                    println!("[VACDevice] Splash page loaded, window shown");
                 }
             }
         })
@@ -1386,7 +1398,7 @@ pub fn run() {
 
             if let Some(ref url) = remote_url {
                 // ---- 远程模式 ----
-                println!("[GClaw] Remote mode — connecting to {}", url);
+                println!("[VACDevice] Remote mode — connecting to {}", url);
                 app.manage(ServerState {
                     child: Mutex::new(None),
                     port: 0,
@@ -1413,7 +1425,7 @@ pub fn run() {
 
                 if is_dev {
                     // ---- 开发模式 ----
-                    println!("[GClaw] Dev mode");
+                    println!("[VACDevice] Dev mode");
                     app.manage(ServerState {
                         child: Mutex::new(None),
                         port: 3200,
@@ -1441,7 +1453,7 @@ pub fn run() {
                     });
                 } else {
                     // ---- 生产模式：下载运行时 → 启动服务 ----
-                    println!("[GClaw] Production mode");
+                    println!("[VACDevice] Production mode");
 
                     std::thread::spawn(move || {
                         // 等待启动页加载
@@ -1462,6 +1474,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_server_url, navigate_to, app_ready, save_file_content,
             retry_startup, update_splash, flash_tray_icon,
+            open_devtools, write_log,
             config::get_app_config, config::set_app_config,
             delta::apply_server_patch, delta::get_current_server_version, delta::fetch_url, delta::download_file,
             delta::restart_server, delta::verify_file_hash,
@@ -1481,7 +1494,7 @@ pub fn run() {
                     if let Some(state) = app.try_state::<ServerState>() {
                         if let Ok(mut guard) = state.child.lock() {
                             if let Some(child) = guard.as_mut() {
-                                println!("[GClaw] Killing server process...");
+                                println!("[VACDevice] Killing server process...");
                                 let _ = child.kill();
                                 let _ = child.wait();
                             }
@@ -1515,7 +1528,7 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::tray::TrayIconBuilder;
 
     let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 GClaw", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 VACDevice", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
 
     let flash_state = Arc::new(AtomicBool::new(false));
@@ -1524,7 +1537,7 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     TrayIconBuilder::with_id("main-tray")
         .icon(app.default_window_icon().cloned().unwrap())
-        .tooltip("GClaw")
+        .tooltip("VACDevice")
         .menu(&menu)
         .on_menu_event(move |app, event| {
             match event.id.as_ref() {

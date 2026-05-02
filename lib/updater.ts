@@ -10,6 +10,14 @@
 import { isTauri } from './tauri'
 import { loadConfig, DEFAULT_CONFIG } from './config'
 
+async function updateLog(msg: string) {
+  console.log(msg);
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('write_log', { message: msg });
+  } catch {}
+}
+
 export interface UpdateProgress {
   /** 已下载字节数 */
   downloaded: number
@@ -108,10 +116,14 @@ async function getPlatformKey(): Promise<string> {
  */
 async function fetchJsonViaRust(url: string): Promise<Record<string, unknown> | null> {
   try {
+    updateLog(`[Updater] fetchJsonViaRust 请求: ${url}`)
     const { invoke } = await import('@tauri-apps/api/core')
     const body = await invoke<string>('fetch_url', { url })
+    const truncated = body.length > 500 ? body.substring(0, 500) + '...(truncated)' : body
+    updateLog(`[Updater] fetchJsonViaRust 响应 (${body.length} chars): ${truncated}`)
     return JSON.parse(body) as Record<string, unknown>
-  } catch {
+  } catch (err) {
+    updateLog(`[Updater] fetchJsonViaRust 失败: ${url} | 错误: ${err}`)
     return null
   }
 }
@@ -124,19 +136,31 @@ async function fetchLatestJsonWithRetry(maxRetries = 2): Promise<Record<string, 
   const cdnUrl = config.update.cdnUrl || DEFAULT_CONFIG.update.cdnUrl
   const githubRepo = config.update.githubRepo || DEFAULT_CONFIG.update.githubRepo
 
-  const endpoints: Array<() => Promise<Record<string, unknown> | null>> = [
-    () => fetchJsonViaRust(`${cdnUrl}/latest.json?t=${Date.now()}`),
-    () => fetchJsonViaRust(`https://github.com/${githubRepo}/releases/latest/download/latest.json`),
+  const cdnEndpoint = `${cdnUrl}/latest.json?t=${Date.now()}`
+  const githubEndpoint = `https://github.com/${githubRepo}/releases/latest/download/latest.json`
+  updateLog(`[Updater] fetchLatestJsonWithRetry 开始 | CDN: ${cdnEndpoint} | GitHub: ${githubEndpoint} | maxRetries=${maxRetries}`)
+
+  const endpoints: Array<{ label: string; fn: () => Promise<Record<string, unknown> | null> }> = [
+    { label: 'CDN', fn: () => fetchJsonViaRust(cdnEndpoint) },
+    { label: 'GitHub', fn: () => fetchJsonViaRust(githubEndpoint) },
   ]
-  for (const fetchFn of endpoints) {
+  for (const ep of endpoints) {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        const result = await fetchFn()
-        if (result) return result
-      } catch { /* ignore, retry */ }
+        updateLog(`[Updater] 尝试 ${ep.label} 端点 (attempt ${attempt + 1}/${maxRetries + 1})`)
+        const result = await ep.fn()
+        if (result) {
+          updateLog(`[Updater] ${ep.label} 端点成功返回数据`)
+          return result
+        }
+        updateLog(`[Updater] ${ep.label} 端点返回空结果`)
+      } catch (err) {
+        updateLog(`[Updater] ${ep.label} 端点异常 (attempt ${attempt + 1}): ${err}`)
+      }
       if (attempt < maxRetries) await delay(Math.pow(2, attempt) * 1000)
     }
   }
+  updateLog(`[Updater] fetchLatestJsonWithRetry 所有端点均失败`)
   return null
 }
 
@@ -148,28 +172,36 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
   try {
     const { getVersion } = await import('@tauri-apps/api/app')
     const currentVersion = await getVersion()
-    console.log(`[Updater] checkForUpdate | 当前版本: ${currentVersion}`)
+    updateLog(`[Updater] checkForUpdate | 当前版本: ${currentVersion}`)
 
     // 先通过自定义端点获取 latest.json
+    updateLog(`[Updater] 开始获取 latest.json...`)
     const latestJson = await fetchLatestJsonWithRetry()
     if (latestJson) {
       const remoteVersion = (latestJson.version as string) || ''
+      updateLog(`[Updater] latest.json 版本比对: 本地=${currentVersion}, 远端=${remoteVersion || 'N/A'}, 需更新=${remoteVersion ? isVersionNewer(remoteVersion, currentVersion) : false}`)
       if (!remoteVersion || !isVersionNewer(remoteVersion, currentVersion)) {
+        updateLog(`[Updater] 全量更新: 无需更新，当前已是最新`)
         return null
       }
+    } else {
+      updateLog(`[Updater] latest.json 获取失败，尝试通过 Tauri updater 检查`)
     }
 
     // 调用 Tauri updater 获取完整更新信息
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let update: any = null
     try {
+      updateLog(`[Updater] 调用 Tauri plugin-updater check()...`)
       const { check } = await import('@tauri-apps/plugin-updater')
       update = await check({ timeout: 15000 })
+      updateLog(`[Updater] Tauri check() 结果: ${update ? `有更新 v${update.version}` : '无更新'}`)
     } catch (pluginErr) {
-      console.error('[Updater] Tauri plugin-updater check() 异常:', pluginErr)
+      updateLog(`[Updater] ERROR: Tauri plugin-updater check() 异常: ${pluginErr}`)
     }
 
     if (update) {
+      updateLog(`[Updater] 全量更新可用: version=${update.version}, canAutoInstall=true`)
       return {
         version: update.version,
         date: update.date ?? undefined,
@@ -185,6 +217,7 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
         const platformKey = await getPlatformKey()
         const platforms = latestJson.platforms as Record<string, { url?: string }> | undefined
         const platEntry = platforms?.[platformKey]
+        updateLog(`[Updater] 全量更新回退手动下载: version=${remoteVersion}, platform=${platformKey}, downloadUrl=${platEntry?.url ?? 'N/A'}`)
         return {
           version: remoteVersion,
           body: '检测到新版本，但自动更新不可用，请手动下载安装。',
@@ -194,6 +227,7 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
       }
     }
 
+    updateLog(`[Updater] 全量更新检查完成: 无可用更新`)
     return null
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -210,39 +244,55 @@ export async function downloadUpdate(
 ): Promise<void> {
   if (!isTauri()) throw new Error('仅 Tauri 桌面模式支持更新')
 
+  updateLog(`[Updater] ====== 全量更新下载开始 ======`)
   const { check } = await import('@tauri-apps/plugin-updater')
   const update = await check({ timeout: 30000 })
   if (!update) throw new Error('没有可用更新')
+  updateLog(`[Updater] 全量更新目标版本: ${update.version}`)
 
   let downloaded = 0
   let totalSize = 0
+  let lastLogPercent = 0
   await update.download((event) => {
     switch (event.event) {
       case 'Started':
         downloaded = 0
         totalSize = event.data.contentLength ?? 0
+        updateLog(`[Updater] 全量更新下载开始: totalSize=${totalSize} bytes`)
         break
       case 'Progress':
         downloaded += event.data.chunkLength
-        onProgress?.({
-          downloaded,
-          total: totalSize,
-          percent: totalSize > 0 ? Math.round(downloaded / totalSize * 100) : 0,
-        })
+        {
+          const percent = totalSize > 0 ? Math.round(downloaded / totalSize * 100) : 0
+          // 每 20% 打印一次进度日志
+          if (percent >= lastLogPercent + 20) {
+            lastLogPercent = percent
+            updateLog(`[Updater] 全量更新下载进度: ${percent}% (${downloaded}/${totalSize} bytes)`)
+          }
+          onProgress?.({
+            downloaded,
+            total: totalSize,
+            percent,
+          })
+        }
         break
       case 'Finished':
+        updateLog(`[Updater] 全量更新下载完成: ${downloaded} bytes`)
         onProgress?.({ downloaded, total: totalSize || downloaded, percent: 100 })
         break
     }
   })
 
   _pendingUpdate = update
+  updateLog(`[Updater] ====== 全量更新下载结束 ======`)
 }
 
 export async function installAndRelaunch(): Promise<void> {
   if (!_pendingUpdate) throw new Error('没有已下载的更新')
+  updateLog(`[Updater] 开始安装全量更新并重启...`)
   const { relaunch } = await import('@tauri-apps/plugin-process')
   await _pendingUpdate.install()
+  updateLog(`[Updater] 全量更新安装完成，正在重启应用...`)
   await relaunch()
 }
 
@@ -269,11 +319,11 @@ export async function checkServerDelta(): Promise<ServerUpdateInfo | null> {
 
     const serverVersion = latestJson.serverVersion as string | undefined
     if (!serverVersion || !isVersionNewer(serverVersion, currentVersion)) {
-      console.log(`[Delta] 本地 server: ${currentVersion}, 远程 server: ${serverVersion ?? 'N/A'}, 需更新: false`)
+      updateLog(`[Delta] 本地 server: ${currentVersion}, 远程 server: ${serverVersion ?? 'N/A'}, 需更新: false`)
       return null
     }
 
-    console.log(`[Delta] 本地 server: ${currentVersion}, 远程 server: ${serverVersion}, 需更新: ${isVersionNewer(serverVersion, currentVersion)}`)
+    updateLog(`[Delta] 本地 server: ${currentVersion}, 远程 server: ${serverVersion}, 需更新: ${isVersionNewer(serverVersion, currentVersion)}`)
 
     const notes = (latestJson.notes as string) || undefined
     const deltas = latestJson.serverDeltas as Record<string, ServerDelta[]> | undefined
@@ -283,6 +333,10 @@ export async function checkServerDelta(): Promise<ServerUpdateInfo | null> {
     if (deltas && typeof deltas === 'object') {
       const platformKey = await getPlatformKey()
       const platformDeltas = deltas[platformKey]
+      updateLog(`[Delta] 平台: ${platformKey}, 可用 delta 数: ${platformDeltas?.length ?? 0}`)
+      if (platformDeltas) {
+        updateLog(`[Delta] delta 候选列表: ${JSON.stringify(platformDeltas.map(d => ({ from: d.from, url: d.url, size: d.size })))}`)
+      }
 
       allMatchedDeltas = (platformDeltas
         ?.filter(d => {
@@ -298,6 +352,7 @@ export async function checkServerDelta(): Promise<ServerUpdateInfo | null> {
           return (ba - aa) || (bb - ab) || (bc - ac)
         })) ?? []
       matchedDelta = allMatchedDeltas[0] ?? null
+      updateLog(`[Delta] 版本过滤后匹配 delta 数: ${allMatchedDeltas.length}, 首选: ${matchedDelta ? `from=${matchedDelta.from}` : 'null'}`)
     }
 
     if (matchedDelta) {
@@ -310,11 +365,13 @@ export async function checkServerDelta(): Promise<ServerUpdateInfo | null> {
     const serverFull = latestJson.serverFullUrl as ServerFullPackage | undefined
     if (serverFull) {
       const sizeMB = (serverFull.size / 1024 / 1024).toFixed(1)
+      updateLog(`[Delta] 无匹配 delta，使用全量包: url=${serverFull.url}, size=${sizeMB} MB`)
       return { version: serverVersion, delta: null, serverFull, label: `全量更新 ~${sizeMB} MB`, notes }
     }
+    updateLog(`[Delta] 无匹配 delta，也无全量包信息`)
     return { version: serverVersion, delta: null, serverFull: null, label: '全量更新', notes }
   } catch (err) {
-    console.error('[Delta] 检查 server delta 失败:', err)
+    updateLog(`[Delta] ERROR: 检查 server delta 失败: ${err}`)
     return null
   }
 }
@@ -348,7 +405,7 @@ export async function downloadServerUpdate(
     const localPath = await join(dataDir, fileName)
 
     try {
-      console.log(`[Delta] 尝试候选 ${i + 1}/${deltaCandidates.length}: from=${candidate.from}, url=${candidate.url}`)
+      updateLog(`[Delta] 尝试候选 ${i + 1}/${deltaCandidates.length}: from=${candidate.from}, url=${candidate.url}`)
       await invoke('download_file', { url: candidate.url, path: localPath })
 
       // hash 校验
@@ -358,26 +415,27 @@ export async function downloadServerUpdate(
           expectedHash: candidate.hash,
         })
         if (!hashValid) {
-          console.warn(`[Delta] hash 校验失败 (from=${candidate.from})，尝试下一个候选...`)
+          updateLog(`[Delta] hash 校验失败 (from=${candidate.from})，尝试下一个候选...`)
           try { await invoke('plugin:fs|remove', { path: localPath }) } catch { /* ignore */ }
           continue
         }
       }
 
       onProgress?.(100)
-      console.log(`[Delta] 下载完成: ${localPath}`)
+      updateLog(`[Delta] 下载完成: ${localPath}`)
       return { localPath, version: info.version }
     } catch (err) {
-      console.warn(`[Delta] 候选 ${i + 1} 下载失败 (from=${candidate.from}):`, err)
+      updateLog(`[Delta] 候选 ${i + 1} 下载失败 (from=${candidate.from}): ${err}`)
       try { await invoke('plugin:fs|remove', { path: localPath }) } catch { /* ignore */ }
     }
   }
 
   // 所有 delta 失败，尝试全量包
   if (info.serverFull) {
-    console.log('[Delta] 所有 delta 候选失败，回退到全量包')
+    updateLog('[Delta] 所有 delta 候选失败，回退到全量包')
     const downloadUrl = info.serverFull.cdnUrl ?? info.serverFull.url
     const fallbackUrl = info.serverFull.cdnUrl ? info.serverFull.url : undefined
+    updateLog(`[Delta] 全量包下载 URL: ${downloadUrl}${fallbackUrl ? ` (fallback: ${fallbackUrl})` : ''}`)
     const expectedHash = info.serverFull.hash
     const fileName = info.serverFull.url.split('/').pop() ?? 'server-full.tar.gz'
     const localPath = await join(dataDir, fileName)
@@ -385,11 +443,14 @@ export async function downloadServerUpdate(
     onProgress?.(0)
     let downloaded = false
     try {
+      updateLog(`[Delta] 开始下载全量包: ${downloadUrl}`)
       await invoke('download_file', { url: downloadUrl, path: localPath })
       downloaded = true
+      updateLog(`[Delta] 全量包下载成功: ${localPath}`)
     } catch (err) {
+      updateLog(`[Delta] 全量包下载失败: ${err}`)
       if (fallbackUrl) {
-        console.warn(`[Delta] CDN 下载失败，回退到源地址: ${fallbackUrl}`)
+        updateLog(`[Delta] CDN 下载失败，回退到源地址: ${fallbackUrl}`)
         await invoke('download_file', { url: fallbackUrl, path: localPath })
         downloaded = true
       } else {
@@ -415,7 +476,7 @@ export async function downloadServerUpdate(
     }
 
     onProgress?.(100)
-    console.log(`[Delta] 全量包下载完成: ${localPath}`)
+    updateLog(`[Delta] 全量包下载完成: ${localPath}`)
     return { localPath, version: info.version }
   }
 
@@ -447,11 +508,11 @@ export async function applyServerUpdate(
     // Windows 上 Rust 会在补丁后自动重启 server，返回 "版本号|restarted:url"
     if (result.includes('|restarted:')) {
       const [newVersion, restartInfo] = result.split('|restarted:')
-      console.log(`[Delta] 应用成功: server version = ${newVersion}, Windows 已自动重启: ${restartInfo}`)
+      updateLog(`[Delta] 应用成功: server version = ${newVersion}, Windows 已自动重启: ${restartInfo}`)
       alreadyRestarted = true
       restartedUrl = restartInfo
     } else {
-      console.log(`[Delta] 应用成功: server version = ${result}`)
+      updateLog(`[Delta] 应用成功: server version = ${result}`)
     }
   } catch (err) {
     const msg = typeof err === 'string' ? err : (err instanceof Error ? err.message : String(err))
@@ -463,26 +524,26 @@ export async function applyServerUpdate(
 
   // 重启 server（Windows 上 apply_server_patch 已自动重启 + 导航 webview，跳过）
   if (restartServer && !alreadyRestarted) {
-    console.log(`[Delta] 正在重启 server 进程...`)
+    updateLog(`[Delta] 正在重启 server 进程...`)
     try {
       const serverUrl = await invoke<string>('restart_server')
-      console.log(`[Delta] Server 已重启: ${serverUrl}`)
+      updateLog(`[Delta] Server 已重启: ${serverUrl}`)
 
       // 刷新 webview 以加载新代码
       try {
         await new Promise(resolve => setTimeout(resolve, 500))
-        console.log('[Delta] 刷新 webview 以加载新代码...')
+        updateLog('[Delta] 刷新 webview 以加载新代码...')
         window.location.href = serverUrl
       } catch {
         // location.href 赋值会触发页面跳转，不会到这里
       }
     } catch (restartErr) {
-      console.error('[Delta] Server 重启失败:', restartErr)
+      updateLog(`[Delta] ERROR: Server 重启失败: ${restartErr}`)
     }
   } else if (alreadyRestarted) {
-    console.log(`[Delta] Windows 已自动重启并导航 webview: ${restartedUrl}`)
+    updateLog(`[Delta] Windows 已自动重启并导航 webview: ${restartedUrl}`)
   } else {
-    console.log(`[Delta] 应用成功，等待用户手动重启 server`)
+    updateLog(`[Delta] 应用成功，等待用户手动重启 server`)
   }
 
   // 清理下载文件
@@ -502,6 +563,7 @@ export async function startupUpdateCheck(
   onTauriUpdate?: (info: UpdateInfo) => void,
 ): Promise<boolean> {
   try {
+    updateLog(`[Startup] ====== 启动时更新检查开始 ======`)
     onProgress?.('loading', 80, '检查更新...')
 
     // 1. 优先检查 Tauri 壳全量更新
@@ -511,23 +573,25 @@ export async function startupUpdateCheck(
         if (tauriUpdate.canAutoInstall) {
           onTauriUpdate?.(tauriUpdate)
           onProgress?.('loading', 85, `发现新版本 v${tauriUpdate.version}，请前往设置安装`)
-          console.log(`[Startup] 发现 Tauri 全量更新 v${tauriUpdate.version}（可自动安装），跳过 server 热更新`)
+          updateLog(`[Startup] 发现 Tauri 全量更新 v${tauriUpdate.version}（可自动安装），跳过 server 热更新`)
           await delay(2000)
           onProgress?.('loading', 100, '启动中...')
           return false
         } else {
-          console.log(`[Startup] 发现 Tauri 全量更新 v${tauriUpdate.version}（仅手动下载），继续检查 server 热更新`)
+          updateLog(`[Startup] 发现 Tauri 全量更新 v${tauriUpdate.version}（仅手动下载），继续检查 server 热更新`)
         }
       }
     } catch (tauriErr) {
-      console.warn('[Startup] Tauri 全量更新检查失败，继续检查 server 热更新:', tauriErr)
+      updateLog(`[Startup] Tauri 全量更新检查失败，继续检查 server 热更新: ${tauriErr}`)
     }
 
     // 2. 无全量更新，再检查 server 热更新
     onProgress?.('loading', 82, '检查热更新...')
     const info = await checkServerDelta()
     if (!info) {
+      updateLog(`[Startup] 无可用热更新，已是最新版本`)
       onProgress?.('loading', 100, '已是最新版本')
+      updateLog(`[Startup] ====== 启动时更新检查结束: 无更新 ======`)
       return false
     }
 
@@ -544,9 +608,11 @@ export async function startupUpdateCheck(
     await applyServerUpdate(result.localPath, result.version, true)
 
     onProgress?.('loading', 100, '更新完成')
+    updateLog(`[Startup] ====== 启动时更新检查结束: 已应用更新 ======`)
     return true
   } catch (err) {
-    console.warn('Startup update check failed:', err)
+    updateLog(`[Startup] ERROR: Startup update check failed: ${err}`)
+    updateLog(`[Startup] ====== 启动时更新检查结束: 出错 ======`)
     onProgress?.('loading', 100, '启动中...')
     return false
   }
@@ -602,31 +668,31 @@ export class AutoUpdater {
         if (tauriUpdate) {
           callbacks.onTauriUpdate?.(tauriUpdate)
           if (tauriUpdate.canAutoInstall) {
-            console.log(`[AutoUpdater] 发现全量更新: ${tauriUpdate.version}（可自动安装），跳过 server 热更新`)
+            updateLog(`[AutoUpdater] 发现全量更新: ${tauriUpdate.version}（可自动安装），跳过 server 热更新`)
             return
           }
-          console.log(`[AutoUpdater] 发现全量更新: ${tauriUpdate.version}（仅手动下载），继续检查 server 热更新`)
+          updateLog(`[AutoUpdater] 发现全量更新: ${tauriUpdate.version}（仅手动下载），继续检查 server 热更新`)
         }
       } catch (tauriErr) {
-        console.warn('[AutoUpdater] Tauri 全量更新检查失败，继续检查 server 热更新:', tauriErr)
+        updateLog(`[AutoUpdater] Tauri 全量更新检查失败，继续检查 server 热更新: ${tauriErr}`)
       }
 
       // 2. 检查 server 热更新
       try {
         const serverUpdate = await checkServerDelta()
         if (serverUpdate) {
-          console.log(`[AutoUpdater] 发现 server 更新: ${serverUpdate.label}`)
+          updateLog(`[AutoUpdater] 发现 server 更新: ${serverUpdate.label}`)
           const result = await downloadServerUpdate(serverUpdate)
-          console.log(`[AutoUpdater] 更新下载完成: ${result.localPath}`)
+          updateLog(`[AutoUpdater] 更新下载完成: ${result.localPath}`)
           callbacks.onUpdateReady?.(result.version, result.localPath)
           return
         }
       } catch (deltaErr) {
-        console.warn('[AutoUpdater] server 更新检查/下载失败:', deltaErr)
+        updateLog(`[AutoUpdater] server 更新检查/下载失败: ${deltaErr}`)
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.error('[AutoUpdater] 更新检查异常:', msg)
+      updateLog(`[AutoUpdater] ERROR: 更新检查异常: ${msg}`)
       callbacks.onError?.(msg)
     } finally {
       this.checking = false
