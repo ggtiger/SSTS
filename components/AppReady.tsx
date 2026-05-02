@@ -6,7 +6,7 @@ import { useEffect } from 'react'
  * 版本变化检测 key（localStorage）
  * 启动时对比，如果版本号变了说明刚完成全量更新
  */
-const LAST_VERSION_KEY = 'ssts_last_version'
+const LAST_VERSION_KEY = 'vacdevice_last_version'
 
 export default function AppReady() {
   useEffect(() => {

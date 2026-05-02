@@ -5,7 +5,7 @@ import AppReady from '@/components/AppReady'
 
 export const metadata: Metadata = {
   title: 'METROLOGY X-1 | 侧滑控制系统',
-  description: 'SSTS - 侧滑测试系统 精密工业监测与遥测接口',
+  description: 'VACDevice - 机动车角度综合校准装置 精密工业监测与遥测接口',
 }
 
 export const viewport: Viewport = {

@@ -1,25 +1,25 @@
 [package]
-name = "ssts"
-version = "0.2.2"
+name = "vacdevice"
+version = "0.2.3"
 edition = "2021"
-description = "SSTS Desktop - 侧滑测试系统"
+description = "VACDevice - 机动车角度综合校准装置"
 
 [lib]
-name = "ssts_lib"
+name = "vacdevice_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "~2.6.0", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-opener = "2"
-tauri-plugin-dialog = "2"
-tauri-plugin-updater = "2"
-tauri-plugin-process = "2"
-tauri-plugin-single-instance = "2"
-tauri-plugin-notification = "2"
-tauri-plugin-os = "2"
+tauri = { version = "~2.10.0", features = ["tray-icon"] }
+tauri-plugin-opener = "~2.5.0"
+tauri-plugin-dialog = "~2.7.0"
+tauri-plugin-updater = "~2.10.0"
+tauri-plugin-process = "~2.3.0"
+tauri-plugin-single-instance = "~2.4.0"
+tauri-plugin-notification = "~2.3.0"
+tauri-plugin-os = "~2.3.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

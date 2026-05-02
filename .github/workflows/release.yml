@@ -79,9 +79,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'SSTS ${{ github.ref_name }}'
+          releaseName: 'VACDevice ${{ github.ref_name }}'
           releaseBody: |
-            ## SSTS ${{ github.ref_name }}
+            ## VACDevice ${{ github.ref_name }}
 
             正在构建中，请稍候...
           releaseDraft: true
@@ -439,7 +439,7 @@ jobs:
           SERVER_FULL_HASH=$(sha256sum "$TMPDIR/${SERVER_TAR_NAME}" | cut -d' ' -f1)
           GH_BASE="https://github.com/ggtiger/SSTS/releases/download/${TAG}"
           SERVER_FULL_GH_URL="${GH_BASE}/${SERVER_TAR_NAME}"
-          SERVER_FULL_CDN_URL="https://${{ secrets.QINIU_CDN_DOMAIN }}/ssts/releases/${TAG}/${SERVER_TAR_NAME}"
+          SERVER_FULL_CDN_URL="http://${{ secrets.QINIU_CDN_DOMAIN }}/ssts/releases/${TAG#v}/${SERVER_TAR_NAME}"
           echo "Server full tar: size=${SERVER_FULL_SIZE}, hash=${SERVER_FULL_HASH}"
 
           jq --arg tv "$TAURI_VERSION" \
@@ -497,14 +497,14 @@ jobs:
             # 收集 commits
             ALL_COMMITS=$(git log ${PREV_TAG}..${TAG} --pretty=format:"- %s" --no-merges || true)
 
-            NOTES="## SSTS ${VERSION}"$'\n\n'
+            NOTES="## VACDevice ${VERSION}"$'\n\n'
             NOTES+="### 变更内容"$'\n'
             NOTES+="${ALL_COMMITS}"$'\n\n'
             NOTES+="---"$'\n'
             NOTES+="[完整变更](https://github.com/ggtiger/SSTS/compare/${PREV_TAG}...${TAG})"$'\n\n'
             NOTES+="在下方 Assets 中下载对应平台的安装包。"
           else
-            NOTES="## SSTS ${VERSION}"$'\n\n'
+            NOTES="## VACDevice ${VERSION}"$'\n\n'
             NOTES+="首次发布"$'\n\n'
             NOTES+="---"$'\n'
             NOTES+="在下方 Assets 中下载对应平台的安装包。"
@@ -520,7 +520,7 @@ jobs:
             echo "ERROR: gh release edit failed, trying alternative..."
             # 备选方案：删除 draft 重新创建
             gh release delete "$TAG" --yes || true
-            gh release create "$TAG" --title "SSTS ${VERSION}" --notes "$NOTES" --verify-tag
+            gh release create "$TAG" --title "VACDevice ${VERSION}" --notes "$NOTES" --verify-tag
           }
 
           echo "DEBUG: Updated release status:"

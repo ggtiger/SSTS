@@ -103,7 +103,7 @@ jobs:
             const standaloneRoot = path.dirname(serverJs);
             console.log("Standalone root:", standaloneRoot);
 
-            const destDir = path.join(ROOT, "dist", "ssts-server");
+            const destDir = path.join(ROOT, "dist", "vacdevice-server");
             assembleServerBundle(standaloneRoot, destDir);
             printBundleSize(destDir);
           '
@@ -114,7 +114,7 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           SERVER_TAR_NAME="server-${VERSION}.tar.gz"
 
-          tar czf "dist/${SERVER_TAR_NAME}" -C dist/ssts-server .
+          tar czf "dist/${SERVER_TAR_NAME}" -C dist/vacdevice-server .
 
           # 验证 gzip 完整性
           gzip -t "dist/${SERVER_TAR_NAME}" || { echo "ERROR: gzip verification failed!"; exit 1; }
@@ -152,7 +152,7 @@ jobs:
 
           DELTAS_JSON="[]"
           PATCH_COUNT=0
-          NEW_SERVER_DIR="dist/ssts-server"
+          NEW_SERVER_DIR="dist/vacdevice-server"
 
           for PREV_TAG in $ALL_TAGS; do
             [ "$PATCH_COUNT" -ge 3 ] && break
@@ -403,7 +403,7 @@ jobs:
           SERVER_FULL_SIZE=$(stat -c%s "$SERVER_TAR_PATH" 2>/dev/null || stat -f%z "$SERVER_TAR_PATH")
           SERVER_FULL_HASH=$(sha256sum "$SERVER_TAR_PATH" | cut -d' ' -f1)
           SERVER_FULL_GH_URL="${GH_BASE}/${SERVER_TAR_NAME}"
-          SERVER_FULL_CDN_URL="https://${{ secrets.QINIU_CDN_DOMAIN }}/ssts/releases/${LATEST_APP_TAG}/${SERVER_TAR_NAME}"
+          SERVER_FULL_CDN_URL="http://${{ secrets.QINIU_CDN_DOMAIN }}/ssts/releases/${VERSION}/${SERVER_TAR_NAME}"
           echo "Server full tar: size=${SERVER_FULL_SIZE}, hash=${SERVER_FULL_HASH}"
 
           # 生成更新说明（commit log）写入 latest.json 的 notes 字段

@@ -1,5 +1,5 @@
 {
-  "name": "ssts",
+  "name": "vacdevice",
   "version": "0.2.4",
   "private": true,
   "scripts": {
@@ -14,11 +14,11 @@
     "start:prod": "HOSTNAME=${HOSTNAME:-0.0.0.0} node .next/standalone/$(find .next/standalone -maxdepth 10 -name server.js -not -path '*/node_modules/*' -type f | head -1 | xargs dirname)/server.js"
   },
   "dependencies": {
-    "@tauri-apps/plugin-dialog": "^2.7.0",
-    "@tauri-apps/plugin-opener": "^2.5.3",
-    "@tauri-apps/plugin-os": "^2.3.2",
-    "@tauri-apps/plugin-process": "^2.3.1",
-    "@tauri-apps/plugin-updater": "^2.10.1",
+    "@tauri-apps/plugin-dialog": "~2.7.0",
+    "@tauri-apps/plugin-opener": "~2.5.3",
+    "@tauri-apps/plugin-os": "~2.3.2",
+    "@tauri-apps/plugin-process": "~2.3.1",
+    "@tauri-apps/plugin-updater": "~2.10.1",
     "lucide-react": "^0.460.0",
     "next": "^15.1.0",
     "react": "^19.0.0",

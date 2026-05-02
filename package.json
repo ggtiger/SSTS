@@ -1,6 +1,6 @@
 {
-  "name": "ssts",
-  "version": "0.2.2",
+  "name": "vacdevice",
+  "version": "0.2.4",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3200",
@@ -15,10 +15,10 @@
     "mock:device": "node scripts/mock-device-server.js"
   },
   "dependencies": {
-    "@tauri-apps/plugin-dialog": "^2.7.0",
-    "@tauri-apps/plugin-opener": "^2.5.3",
-    "@tauri-apps/plugin-os": "^2.3.2",
-    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-dialog": "~2.7.0",
+    "@tauri-apps/plugin-opener": "~2.5.3",
+    "@tauri-apps/plugin-os": "~2.3.2",
+    "@tauri-apps/plugin-process": "~2.3.1",
     "@tauri-apps/plugin-updater": "~2.10.1",
     "lucide-react": "^0.460.0",
     "next": "^15.1.0",

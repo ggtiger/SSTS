@@ -314,8 +314,8 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                   <div className="flex items-center gap-3 mb-4">
                     <span className="material-symbols-outlined text-3xl text-primary">precision_manufacturing</span>
                     <div>
-                      <h3 className="font-bold text-base text-primary">4-Wheel Alignment</h3>
-                      <p className="text-slate-500">四轮定位检测系统</p>
+                      <h3 className="font-bold text-base text-primary">VACDevice</h3>
+                      <p className="text-slate-500">机动车角度综合校准装置</p>
                     </div>
                   </div>
                   <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-slate-600">
@@ -326,7 +326,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                     <span className="text-slate-400">框架</span>
                     <span>Tauri + Next.js</span>
                     <span className="text-slate-400">技术支持</span>
-                    <span>support@ssts.local</span>
+                    <span>support@vacdevice.local</span>
                   </div>
 
                   <div className="mt-4 flex items-center gap-3">

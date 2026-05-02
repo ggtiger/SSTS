@@ -31,7 +31,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
 }
 
-const STORAGE_KEY = 'ssts-config'
+const STORAGE_KEY = 'vacdevice-config'
 
 /** 深度合并，确保缺失字段回退到默认值 */
 function mergeConfig(partial: Partial<AppConfig>): AppConfig {
