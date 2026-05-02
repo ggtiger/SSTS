@@ -312,7 +312,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
               {activeTab === 'about' && (
                 <div className="space-y-3 text-sm">
                   <div className="flex items-center gap-3 mb-4">
-                    <span className="material-symbols-outlined text-3xl text-primary">precision_manufacturing</span>
+                    <img src="/icon.png" alt="VACDevice" className="w-10 h-10 rounded-lg" />
                     <div>
                       <h3 className="font-bold text-base text-primary">VACDevice</h3>
                       <p className="text-slate-500">机动车角度综合校准装置</p>

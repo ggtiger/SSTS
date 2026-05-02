@@ -82,7 +82,7 @@ export default function TopAppBar() {
     >
       <div className="flex items-center gap-8">
         <span className="text-lg font-black text-primary tracking-tighter flex items-center">
-          <span className="material-symbols-outlined text-2xl mr-2">precision_manufacturing</span>
+          <img src="/icon.png" alt="VACDevice" className="w-7 h-7 mr-2 rounded" />
           Vehicle Angle Calibration Device
         </span>
         <nav className="hidden md:flex items-center gap-6 h-16">
