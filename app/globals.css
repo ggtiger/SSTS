@@ -1,20 +1,106 @@
+/* Inter - Latin */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/inter-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* Inter - Latin Extended */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/inter-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* Material Symbols Outlined */
+@font-face {
+  font-family: 'Material Symbols Outlined';
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: swap;
+  src: url('/fonts/material-symbols-outlined.woff2') format('woff2');
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --theme-primary: 147 51 234; /* purple-600 */
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-.dark {
-  --background: #0a0a0a;
-  --foreground: #ededed;
+html, body {
+  height: 100%;
+  overflow: hidden;
 }
 
 body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background-color: #F4F7F9;
+  font-family: 'Inter', sans-serif;
+  color: #1b1c1d;
+}
+
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+@layer components {
+  .industrial-card {
+    background-color: #ffffff;
+    border: 1px solid #E1E8ED;
+    box-shadow: 0px 2px 4px rgba(26, 43, 60, 0.05);
+    transition: all 0.2s ease-in-out;
+  }
+
+  .industrial-card-header {
+    border-bottom: 2px solid #efedef;
+    padding: 12px 24px;
+  }
+
+  .monospaced-data {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  }
+
+  /* Tauri 窗口拖动区域 */
+  .draggable-region {
+    -webkit-app-region: drag;
+    app-region: drag;
+  }
+
+  /* 拖动区域内只有具体交互元素禁用拖动，保持周围空白可拖动 */
+  .draggable-region button span,
+  .draggable-region button svg,
+  .draggable-region a span,
+  .draggable-region a svg,
+  .draggable-region input,
+  .draggable-region [role="button"] span,
+  .draggable-region [role="button"] svg,
+  .draggable-region [data-tauri-no-drag] {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
 }

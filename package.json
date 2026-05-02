@@ -1,6 +1,6 @@
 {
   "name": "ssts",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3200",
@@ -11,18 +11,20 @@
     "tauri:build": "tauri build",
     "tauri:bundle": "node scripts/bundle-sidecar.js",
     "deploy:build": "node scripts/deploy-build.js",
-    "start:prod": "HOSTNAME=${HOSTNAME:-0.0.0.0} node .next/standalone/$(find .next/standalone -maxdepth 10 -name server.js -not -path '*/node_modules/*' -type f | head -1 | xargs dirname)/server.js"
+    "start:prod": "HOSTNAME=${HOSTNAME:-0.0.0.0} node .next/standalone/$(find .next/standalone -maxdepth 10 -name server.js -not -path '*/node_modules/*' -type f | head -1 | xargs dirname)/server.js",
+    "mock:device": "node scripts/mock-device-server.js"
   },
   "dependencies": {
     "@tauri-apps/plugin-dialog": "^2.7.0",
     "@tauri-apps/plugin-opener": "^2.5.3",
     "@tauri-apps/plugin-os": "^2.3.2",
     "@tauri-apps/plugin-process": "^2.3.1",
-    "@tauri-apps/plugin-updater": "^2.10.1",
+    "@tauri-apps/plugin-updater": "~2.10.1",
     "lucide-react": "^0.460.0",
     "next": "^15.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "recharts": "^3.8.1",
     "zustand": "^5.0.12"
   },
   "devDependencies": {

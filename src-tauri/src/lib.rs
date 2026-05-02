@@ -6,6 +6,7 @@ use std::process::{Child, Command};
 use std::net::TcpListener;
 
 mod delta;
+mod comm;
 
 /// 服务器状态
 pub struct ServerState {
@@ -1351,6 +1352,7 @@ pub fn run() {
                 }
             }
         })
+        .manage(comm::CommManager::new())
         .setup(move |app| {
             // Windows: 移除原生标题栏，使用前端模拟红绿灯按钮
             #[cfg(target_os = "windows")]
@@ -1440,6 +1442,9 @@ pub fn run() {
                 }
             }
 
+            // 设置 CommManager 的 AppHandle
+            app.state::<comm::CommManager>().set_app_handle(app.handle().clone());
+
             setup_tray(app)?;
             Ok(())
         })
@@ -1450,6 +1455,13 @@ pub fn run() {
             retry_startup, update_splash, flash_tray_icon,
             delta::apply_server_patch, delta::get_current_server_version, delta::fetch_url, delta::download_file,
             delta::restart_server, delta::verify_file_hash,
+            comm::device_connect, comm::device_disconnect, comm::device_get_state,
+            comm::device_cancel_connect,
+            comm::device_start_homing, comm::device_emergency_stop, comm::device_reset,
+            comm::device_move_to, comm::device_jog_start, comm::device_jog_stop,
+            comm::device_relay_on, comm::device_relay_off, comm::device_relay_all_off,
+            comm::device_read_input, comm::device_stop_io_test,
+            comm::device_set_params, comm::device_send_raw, comm::device_get_debug_log,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

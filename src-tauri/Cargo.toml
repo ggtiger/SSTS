@@ -1,6 +1,6 @@
 [package]
 name = "ssts"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "SSTS Desktop - 侧滑测试系统"
 
@@ -25,3 +25,5 @@ serde_json = "1"
 sha2 = "0.10"
 flate2 = "1"
 tar = "0.4"
+tokio = { version = "1", features = ["net", "time", "sync", "macros", "io-util"] }
+chrono = { version = "0.4", features = ["serde"] }
