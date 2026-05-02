@@ -49,7 +49,7 @@ fn default_device() -> DeviceConfig {
 }
 fn default_update() -> UpdateConfig {
     UpdateConfig {
-        cdn_url: "https://o09u11p5v.qnssl.com/ssts".into(),
+        cdn_url: "http://o09u11p5v.qnssl.com/ssts".into(),
         github_repo: "ggtiger/SSTS".into(),
     }
 }
@@ -66,7 +66,7 @@ fn default_port() -> u16 {
     10001
 }
 fn default_cdn_url() -> String {
-    "https://o09u11p5v.qnssl.com/ssts".into()
+    "http://o09u11p5v.qnssl.com/ssts".into()
 }
 fn default_github_repo() -> String {
     "ggtiger/SSTS".into()

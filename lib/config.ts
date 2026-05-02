@@ -22,7 +22,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     port: 10001,
   },
   update: {
-    cdnUrl: 'https://o09u11p5v.qnssl.com/ssts',
+    cdnUrl: 'http://o09u11p5v.qnssl.com/ssts',
     githubRepo: 'ggtiger/SSTS',
   },
   app: {
