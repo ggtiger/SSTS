@@ -1,6 +1,9 @@
 "use client"
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { isTauri } from '@/lib/tauri'
+import { checkForUpdate } from '@/lib/updater'
+import { useUpdaterStore } from '@/lib/store'
 
 interface SettingsData {
   defaultIp: string
@@ -37,13 +40,61 @@ interface SettingsModalProps {
 export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [settings, setSettings] = useState<SettingsData>(DEFAULT_SETTINGS)
   const [activeTab, setActiveTab] = useState<'connection' | 'display' | 'about'>('connection')
+  const [appVersion, setAppVersion] = useState('0.1.1')
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+  const [checkResult, setCheckResult] = useState<'latest' | 'error' | null>(null)
+  const resultTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (open) {
       setSettings(loadSettings())
       setActiveTab('connection')
+      setCheckResult(null)
+      setCheckingUpdate(false)
     }
   }, [open])
+
+  useEffect(() => {
+    return () => {
+      if (resultTimerRef.current) clearTimeout(resultTimerRef.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    (async () => {
+      try {
+        if (isTauri()) {
+          const { getVersion } = await import('@tauri-apps/api/app')
+          const version = await getVersion()
+          setAppVersion(version)
+        }
+      } catch {
+        // 非 Tauri 环境，使用默认值
+      }
+    })()
+  }, [])
+
+  const handleCheckUpdate = useCallback(async () => {
+    setCheckingUpdate(true)
+    setCheckResult(null)
+    if (resultTimerRef.current) clearTimeout(resultTimerRef.current)
+
+    try {
+      const update = await checkForUpdate()
+      if (update) {
+        useUpdaterStore.getState().setAvailable(update)
+        onClose()
+      } else {
+        setCheckResult('latest')
+        resultTimerRef.current = setTimeout(() => setCheckResult(null), 3000)
+      }
+    } catch {
+      setCheckResult('error')
+      resultTimerRef.current = setTimeout(() => setCheckResult(null), 3000)
+    } finally {
+      setCheckingUpdate(false)
+    }
+  }, [onClose])
 
   const handleSave = useCallback(() => {
     saveSettings(settings)
@@ -168,11 +219,41 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
               </div>
               <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-slate-600">
                 <span className="text-slate-400">版本</span>
-                <span className="font-mono">0.1.0</span>
+                <span className="font-mono">{appVersion}</span>
                 <span className="text-slate-400">框架</span>
                 <span>Tauri + Next.js</span>
                 <span className="text-slate-400">技术支持</span>
                 <span>support@ssts.local</span>
+              </div>
+
+              <div className="mt-4 flex items-center gap-3">
+                <button
+                  onClick={handleCheckUpdate}
+                  disabled={checkingUpdate}
+                  className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm rounded-lg font-medium transition-colors ${
+                    checkingUpdate
+                      ? 'bg-primary/60 text-white cursor-not-allowed'
+                      : 'bg-primary text-white hover:bg-primary/90'
+                  }`}
+                >
+                  <span className={`material-symbols-outlined text-[18px] ${checkingUpdate ? 'animate-spin' : ''}`}>
+                    {checkingUpdate ? 'progress_activity' : 'system_update'}
+                  </span>
+                  {checkingUpdate ? '正在检查...' : '检查更新'}
+                </button>
+
+                {checkResult === 'latest' && (
+                  <span className="inline-flex items-center gap-1 text-sm text-green-600">
+                    <span className="material-symbols-outlined text-[18px]">check_circle</span>
+                    当前已是最新版本
+                  </span>
+                )}
+                {checkResult === 'error' && (
+                  <span className="inline-flex items-center gap-1 text-sm text-red-500">
+                    <span className="material-symbols-outlined text-[18px]">error</span>
+                    检查失败，请稍后重试
+                  </span>
+                )}
               </div>
             </div>
           )}

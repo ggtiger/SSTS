@@ -1,10 +1,13 @@
 "use client"
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { WindowControls } from './WindowControls'
 import SettingsModal from './SettingsModal'
+import UpdateNotification from './UpdateNotification'
+import { AutoUpdater } from '@/lib/updater'
+import { useUpdaterStore } from '@/lib/store'
 
 const navItems = [
   { label: '首页', icon: 'dashboard', href: '/' },
@@ -17,6 +20,23 @@ const navItems = [
 export default function TopAppBar() {
   const pathname = usePathname()
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const setAvailable = useUpdaterStore((s) => s.setAvailable)
+  const updaterRef = useRef<AutoUpdater | null>(null)
+
+  useEffect(() => {
+    const updater = new AutoUpdater()
+    updaterRef.current = updater
+    updater.start({
+      onTauriUpdate: (info) => {
+        console.log('[TopAppBar] 发现全量更新:', info.version)
+        setAvailable(info)
+      },
+      onError: (err) => {
+        console.warn('[TopAppBar] 更新检查出错:', err)
+      },
+    })
+    return () => updater.stop()
+  }, [setAvailable])
 
   return (
     <header
@@ -58,6 +78,7 @@ export default function TopAppBar() {
         <WindowControls />
       </div>
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <UpdateNotification />
     </header>
   )
 }
