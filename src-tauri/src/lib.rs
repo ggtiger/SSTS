@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::process::{Child, Command};
 use std::net::TcpListener;
 
+mod config;
 mod delta;
 mod comm;
 
@@ -1362,15 +1363,23 @@ pub fn run() {
                 }
             }
 
-            // 所有点击关闭时隐藏到托盘，不退出
+            // 初始化配置管理器
+            let app_data_dir = app.path().app_data_dir().expect("failed to get app data dir");
+            app.manage(config::ConfigManager::new(app_data_dir));
+
+            // 关闭行为：根据配置决定是隐藏到托盘还是直接关闭
             if let Some(main_window) = app.get_webview_window("main") {
                 let app_handle: tauri::AppHandle = app.handle().clone();
                 main_window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        if let Some(window) = app_handle.get_webview_window("main") {
-                            let _ = window.hide();
+                        let close_to_tray = app_handle.state::<config::ConfigManager>().get_close_to_tray();
+                        if close_to_tray {
+                            api.prevent_close();
+                            if let Some(window) = app_handle.get_webview_window("main") {
+                                let _ = window.hide();
+                            }
                         }
+                        // close_to_tray 为 false 时不调用 prevent_close，窗口正常关闭
                     }
                 });
             }
@@ -1453,6 +1462,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_server_url, navigate_to, app_ready, save_file_content,
             retry_startup, update_splash, flash_tray_icon,
+            config::get_app_config, config::set_app_config,
             delta::apply_server_patch, delta::get_current_server_version, delta::fetch_url, delta::download_file,
             delta::restart_server, delta::verify_file_hash,
             comm::device_connect, comm::device_disconnect, comm::device_get_state,

@@ -41,15 +41,16 @@ export function WindowControls() {
 
   return (
     <div
-      className="flex items-stretch h-full select-none"
+      className="fixed top-0 right-0 z-[9999] flex items-stretch h-[32px] select-none"
       style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       data-tauri-no-drag
     >
       {/* 最小化 */}
       <button
         onClick={handleMinimize}
-        className="w-[40px] h-full flex items-center justify-center transition-colors
+        className="w-[46px] h-full flex items-center justify-center transition-colors
           text-gray-500 hover:bg-black/[0.05] active:bg-black/[0.08]"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         title="最小化"
       >
         <svg width="10" height="1" viewBox="0 0 10 1">
@@ -60,8 +61,9 @@ export function WindowControls() {
       {/* 最大化/还原 */}
       <button
         onClick={handleMaximize}
-        className="w-[40px] h-full flex items-center justify-center transition-colors
+        className="w-[46px] h-full flex items-center justify-center transition-colors
           text-gray-500 hover:bg-black/[0.05] active:bg-black/[0.08]"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         title={isMaximized ? '还原' : '最大化'}
       >
         {isMaximized ? (
@@ -80,8 +82,9 @@ export function WindowControls() {
       {/* 关闭 */}
       <button
         onClick={handleClose}
-        className="w-[40px] h-full flex items-center justify-center transition-colors
+        className="w-[46px] h-full flex items-center justify-center transition-colors
           text-gray-500 hover:bg-[#e81123] hover:text-white active:bg-[#bf0f1d] active:text-white"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         title="关闭"
       >
         <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" strokeWidth="1.2">

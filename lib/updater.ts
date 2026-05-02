@@ -8,6 +8,7 @@
  */
 
 import { isTauri } from './tauri'
+import { loadConfig, DEFAULT_CONFIG } from './config'
 
 export interface UpdateProgress {
   /** 已下载字节数 */
@@ -119,9 +120,13 @@ async function fetchJsonViaRust(url: string): Promise<Record<string, unknown> | 
  * 带重试的 latest.json 获取（CDN + GitHub 双端点）
  */
 async function fetchLatestJsonWithRetry(maxRetries = 2): Promise<Record<string, unknown> | null> {
+  const config = await loadConfig()
+  const cdnUrl = config.update.cdnUrl || DEFAULT_CONFIG.update.cdnUrl
+  const githubRepo = config.update.githubRepo || DEFAULT_CONFIG.update.githubRepo
+
   const endpoints: Array<() => Promise<Record<string, unknown> | null>> = [
-    () => fetchJsonViaRust(`https://o09u11p5v.qnssl.com/ssts/latest.json?t=${Date.now()}`),
-    () => fetchJsonViaRust('https://github.com/ggtiger/SSTS/releases/latest/download/latest.json'),
+    () => fetchJsonViaRust(`${cdnUrl}/latest.json?t=${Date.now()}`),
+    () => fetchJsonViaRust(`https://github.com/${githubRepo}/releases/latest/download/latest.json`),
   ]
   for (const fetchFn of endpoints) {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
