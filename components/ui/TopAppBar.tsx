@@ -21,6 +21,8 @@ export default function TopAppBar() {
   const pathname = usePathname()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const setAvailable = useUpdaterStore((s) => s.setAvailable)
+  const setServerReady = useUpdaterStore((s) => s.setServerReady)
+  const showServerUpdatedToast = useUpdaterStore((s) => s.showServerUpdatedToast)
   const updaterRef = useRef<AutoUpdater | null>(null)
 
   useEffect(() => {
@@ -31,12 +33,20 @@ export default function TopAppBar() {
         console.log('[TopAppBar] 发现全量更新:', info.version)
         setAvailable(info)
       },
+      onUpdateReady: (version, localPath) => {
+        console.log('[TopAppBar] 热更新已下载:', version, localPath)
+        setServerReady(version, localPath)
+      },
+      onServerUpdated: (newVersion) => {
+        console.log('[TopAppBar] Server 已更新到:', newVersion)
+        showServerUpdatedToast(newVersion)
+      },
       onError: (err) => {
         console.warn('[TopAppBar] 更新检查出错:', err)
       },
     })
     return () => updater.stop()
-  }, [setAvailable])
+  }, [setAvailable, setServerReady, showServerUpdatedToast])
 
   return (
     <header
