@@ -323,32 +323,6 @@ export default function HomePage() {
                   </div>
                   <Button variant="primary" icon="my_location" onClick={handleMoveTo}>移动</Button>
                 </div>
-                {/* 微调按钮 */}
-                <div className="flex gap-1">
-                  {[
-                    { offset: -0.007, label: '-0.007°' },
-                    { offset: -0.005, label: '-0.005°' },
-                    { offset: -0.003, label: '-0.003°' },
-                    { offset: 0.003, label: '+0.003°' },
-                    { offset: 0.005, label: '+0.005°' },
-                    { offset: 0.007, label: '+0.007°' },
-                  ].map(({ offset, label }) => (
-                    <button
-                      key={label}
-                      className={`flex-1 px-1 py-1 text-[10px] font-mono rounded border transition-colors ${
-                        offset < 0
-                          ? 'text-red-500 border-red-200 hover:bg-red-50 active:bg-red-100'
-                          : 'text-green-500 border-green-200 hover:bg-green-50 active:bg-green-100'
-                      }`}
-                      onClick={() => {
-                        const currentAngle = state.position / 1000
-                        actions.moveTo(currentAngle + offset)
-                      }}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
               </div>
             </IndustrialCard>
 

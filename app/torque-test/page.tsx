@@ -6,50 +6,15 @@ import type { ScaleDeviceInfo } from '@/lib/comm/types'
 import IndustrialCard from '@/components/ui/IndustrialCard'
 import StatusIndicator from '@/components/ui/StatusIndicator'
 import NumericInput from '@/components/ui/NumericInput'
-
-type UnitType = 'N' | 'Nm'
+import { isTauri } from '@/lib/tauri'
+import { useTorqueStore, initialTorqueData } from '@/lib/store/torque-store'
+import type { TorqueRow, TorqueRecord } from '@/lib/store/torque-store'
+import { initTorqueDB, saveTorqueRecord, getAllTorqueRecords, updateTorqueRecord, deleteTorqueRecord } from '@/lib/db/torque-records'
 
 const inputClass = "w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs font-mono text-center focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-const disabledInputClass = "w-full px-2 py-1.5 bg-slate-100 border border-slate-300 rounded text-sm font-mono text-slate-400 cursor-not-allowed"
-const primaryBtnClass = "px-4 py-2 bg-primary hover:bg-primary/90 text-on-primary text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-1.5"
-const criticalBtnClass = "px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-1.5"
-
-interface TorqueRow {
-  id: string
-  direction: 'cw' | 'ccw'
-  standardPoint: string
-  values: [string, string, string]
-  average: number | null
-  error: number | null
-  repeatability: number | null
-}
-
-const createInitialRows = (): TorqueRow[] => {
-  const rows: TorqueRow[] = []
-  for (let i = 1; i <= 5; i++) {
-    rows.push({
-      id: `CW${i}`,
-      direction: 'cw',
-      standardPoint: i === 1 ? 'A1' : '',
-      values: ['', '', ''],
-      average: null,
-      error: null,
-      repeatability: null,
-    })
-  }
-  for (let i = 1; i <= 5; i++) {
-    rows.push({
-      id: `CCW${i}`,
-      direction: 'ccw',
-      standardPoint: '',
-      values: ['', '', ''],
-      average: null,
-      error: null,
-      repeatability: null,
-    })
-  }
-  return rows
-}
+const disabledInputClass = "w-full px-2 py-1 bg-slate-100 border border-slate-300 rounded text-xs font-mono text-slate-400 cursor-not-allowed"
+const primaryBtnClass = "flex-1 px-3 py-1.5 bg-primary hover:bg-primary/90 text-on-primary text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-1"
+const criticalBtnClass = "flex-1 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-1"
 
 const calculateRow = (row: TorqueRow): TorqueRow => {
   const vals = row.values.map(v => parseFloat(v)).filter(v => !isNaN(v))
@@ -71,18 +36,20 @@ export default function TorqueTestPage() {
   const scaleDataRef = useRef(scaleState.data)
   scaleDataRef.current = scaleState.data
 
-  // === 单位选择 ===
-  const [unit, setUnit] = useState<UnitType>('N')
-
-  // === 表格数据 ===
-  const [rows, setRows] = useState<TorqueRow[]>(createInitialRows)
+  // === 从 Zustand Store 获取持久化状态 ===
+  const {
+    measureData, setMeasureData, resetMeasureData,
+    driftValues, setDriftValues, resetDriftValues,
+    unit, setUnit,
+    recordHistory, setRecordHistory,
+    viewingRecordId, setViewingRecordId,
+  } = useTorqueStore()
 
   // === 自动测量 ===
   const [isAutoMeasuring, setIsAutoMeasuring] = useState(false)
   const abortAutoRef = useRef(false)
 
   // === 漂移测试 ===
-  const [driftValues, setDriftValues] = useState({ min0: '', min5: '', min10: '' })
   const [isTimerRunning, setIsTimerRunning] = useState(false)
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -94,6 +61,23 @@ export default function TorqueTestPage() {
   // === Toast ===
   const [toastMsg, setToastMsg] = useState<string | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // === 记录列表下拉 ===
+  const [showRecordList, setShowRecordList] = useState(false)
+
+  // === DB 初始化 ===
+  useEffect(() => {
+    const loadRecords = async () => {
+      try {
+        await initTorqueDB()
+        const records = await getAllTorqueRecords()
+        setRecordHistory(records)
+      } catch (err) {
+        console.error('加载记录失败:', err)
+      }
+    }
+    loadRecords()
+  }, [])
 
   useEffect(() => {
     if (scaleError) {
@@ -140,6 +124,15 @@ export default function TorqueTestPage() {
     }, 1000)
   }
 
+  const cancelDriftTest = () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current)
+      timerRef.current = null
+    }
+    setIsTimerRunning(false)
+    setElapsedSeconds(0)
+  }
+
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current)
@@ -181,18 +174,18 @@ export default function TorqueTestPage() {
 
   // === 表格编辑 ===
   const handleStandardPointEdit = useCallback((rowId: string, value: string) => {
-    setRows(prev =>
-      prev.map(row => {
+    setMeasureData(
+      measureData.map(row => {
         if (row.id !== rowId) return row
         const updated = { ...row, standardPoint: value }
         return calculateRow(updated)
       })
     )
-  }, [])
+  }, [measureData, setMeasureData])
 
   const handleValueEdit = useCallback((rowId: string, colIndex: number, value: string) => {
-    setRows(prev =>
-      prev.map(row => {
+    setMeasureData(
+      measureData.map(row => {
         if (row.id !== rowId) return row
         const newValues: [string, string, string] = [...row.values]
         newValues[colIndex] = value
@@ -200,7 +193,7 @@ export default function TorqueTestPage() {
         return calculateRow(updated)
       })
     )
-  }, [])
+  }, [measureData, setMeasureData])
 
   // === 操作按钮 ===
   const handleZero = async () => {
@@ -210,8 +203,9 @@ export default function TorqueTestPage() {
   }
 
   const handleClear = () => {
-    setRows(createInitialRows())
-    setDriftValues({ min0: '', min5: '', min10: '' })
+    resetMeasureData()
+    resetDriftValues()
+    setViewingRecordId(null)
     setIsTimerRunning(false)
     setElapsedSeconds(0)
     if (timerRef.current) {
@@ -220,7 +214,87 @@ export default function TorqueTestPage() {
     }
   }
 
-  const handleExport = () => {
+  // === 记录管理函数 ===
+  const handleAutoRecord = async () => {
+    try {
+      const timestamp = new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      await saveTorqueRecord({
+        timestamp,
+        measureData: measureData.map(r => ({ ...r, values: [...r.values] as [string, string, string] })),
+        driftValues: { ...driftValues },
+        unit: unit,
+      })
+      const records = await getAllTorqueRecords()
+      setRecordHistory(records)
+      setToastMsg('数据已记录')
+      if (toastTimer.current) clearTimeout(toastTimer.current)
+      toastTimer.current = setTimeout(() => setToastMsg(null), 2000)
+    } catch (err) {
+      console.error('保存记录失败:', err)
+      setToastMsg('记录保存失败')
+      if (toastTimer.current) clearTimeout(toastTimer.current)
+      toastTimer.current = setTimeout(() => setToastMsg(null), 3000)
+    }
+  }
+
+  const handleViewRecord = (record: TorqueRecord) => {
+    setMeasureData(record.measureData.map(r => ({ ...r, values: [...r.values] as [string, string, string] })))
+    setDriftValues({ ...record.driftValues })
+    setUnit(record.unit)
+    setViewingRecordId(record.id)
+    setShowRecordList(false)
+  }
+
+  const handleSaveRecord = async () => {
+    if (!viewingRecordId) return
+    try {
+      await updateTorqueRecord(viewingRecordId, {
+        measureData: measureData.map(r => ({ ...r, values: [...r.values] as [string, string, string] })),
+        driftValues: { ...driftValues },
+        unit: unit,
+      })
+      const records = await getAllTorqueRecords()
+      setRecordHistory(records)
+      setToastMsg('修改已保存')
+      if (toastTimer.current) clearTimeout(toastTimer.current)
+      toastTimer.current = setTimeout(() => setToastMsg(null), 2000)
+    } catch (err) {
+      console.error('保存修改失败:', err)
+      setToastMsg('保存失败')
+      if (toastTimer.current) clearTimeout(toastTimer.current)
+      toastTimer.current = setTimeout(() => setToastMsg(null), 3000)
+    }
+  }
+
+  const handleBackToEdit = () => {
+    setViewingRecordId(null)
+    resetMeasureData()
+    resetDriftValues()
+  }
+
+  const handleDeleteRecord = async (recordId: number) => {
+    try {
+      await deleteTorqueRecord(recordId)
+      const records = await getAllTorqueRecords()
+      setRecordHistory(records)
+      if (viewingRecordId === recordId) {
+        setViewingRecordId(null)
+        resetMeasureData()
+        resetDriftValues()
+      }
+    } catch (err) {
+      console.error('删除记录失败:', err)
+    }
+  }
+
+  // === CSV 生成 ===
+  const generateCSV = (rows: TorqueRow[], drift: typeof driftValues) => {
+    const dResult = (() => {
+      const v10 = parseFloat(drift.min10)
+      const v0 = parseFloat(drift.min0)
+      if (!isNaN(v10) && !isNaN(v0)) return (v10 - v0).toFixed(2)
+      return ''
+    })()
     let csv = '方向,标准点,示值1,示值2,示值3,平均值,示值误差%,重复性%\n'
     for (const row of rows) {
       const dir = row.direction === 'cw' ? '顺时针' : '逆时针'
@@ -228,15 +302,73 @@ export default function TorqueTestPage() {
     }
     csv += '\n漂移测试\n'
     csv += '0min,5min,10min,漂移\n'
-    csv += `${driftValues.min0},${driftValues.min5},${driftValues.min10},${driftResult}\n`
+    csv += `${drift.min0},${drift.min5},${drift.min10},${dResult}\n`
+    return csv
+  }
 
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `力矩测试_${new Date().toISOString().slice(0, 10)}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+  const handleExport = async () => {
+    const csvContent = generateCSV(measureData, driftValues)
+
+    if (isTauri()) {
+      try {
+        const { save } = await import('@tauri-apps/plugin-dialog')
+        const { invoke } = await import('@tauri-apps/api/core')
+        const filePath = await save({
+          defaultPath: `力矩测试_${new Date().toLocaleDateString('zh-CN')}.csv`,
+          filters: [{ name: 'CSV', extensions: ['csv'] }],
+        })
+        if (!filePath) return
+        const content = new TextEncoder().encode('\uFEFF' + csvContent)
+        await invoke('save_file_content', { path: filePath, content: Array.from(content) })
+        setToastMsg('数据已导出')
+        if (toastTimer.current) clearTimeout(toastTimer.current)
+        toastTimer.current = setTimeout(() => setToastMsg(null), 2000)
+      } catch (err) {
+        console.error('导出失败:', err)
+        setToastMsg('导出失败')
+        if (toastTimer.current) clearTimeout(toastTimer.current)
+        toastTimer.current = setTimeout(() => setToastMsg(null), 3000)
+      }
+    } else {
+      const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `力矩测试_${new Date().toLocaleDateString('zh-CN')}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+      setToastMsg('数据已导出')
+      if (toastTimer.current) clearTimeout(toastTimer.current)
+      toastTimer.current = setTimeout(() => setToastMsg(null), 2000)
+    }
+  }
+
+  const handleExportRecord = async (record: TorqueRecord) => {
+    const csvContent = generateCSV(record.measureData, record.driftValues)
+
+    if (isTauri()) {
+      try {
+        const { save } = await import('@tauri-apps/plugin-dialog')
+        const { invoke } = await import('@tauri-apps/api/core')
+        const filePath = await save({
+          defaultPath: `力矩测试_${record.timestamp.replace(/[\/\s:]/g, '-')}.csv`,
+          filters: [{ name: 'CSV', extensions: ['csv'] }],
+        })
+        if (!filePath) return
+        const content = new TextEncoder().encode('\uFEFF' + csvContent)
+        await invoke('save_file_content', { path: filePath, content: Array.from(content) })
+      } catch (err) {
+        console.error('导出失败:', err)
+      }
+    } else {
+      const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `力矩测试_${record.timestamp.replace(/[\/\s:]/g, '-')}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    }
   }
 
   // === 自动测量 ===
@@ -245,7 +377,7 @@ export default function TorqueTestPage() {
     setIsAutoMeasuring(true)
     abortAutoRef.current = false
     try {
-      for (const row of rows) {
+      for (const row of measureData) {
         if (abortAutoRef.current) break
         for (let i = 0; i < 3; i++) {
           if (abortAutoRef.current) break
@@ -278,8 +410,8 @@ export default function TorqueTestPage() {
     return val.toFixed(2)
   }
 
-  const cwRows = rows.filter(r => r.direction === 'cw')
-  const ccwRows = rows.filter(r => r.direction === 'ccw')
+  const cwRows = measureData.filter(r => r.direction === 'cw')
+  const ccwRows = measureData.filter(r => r.direction === 'ccw')
   const unitLabel = unit === 'N' ? '转向力/N' : '力矩/Nm'
 
   // 信号强度图标
@@ -386,7 +518,7 @@ export default function TorqueTestPage() {
               </div>
             )}
 
-            {/* 已连接设备信息（含AD内码和重量） */}
+            {/* 已连接设备信息 */}
             {scaleState.isConnected && (
               <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
                 <div className="flex items-center gap-2">
@@ -404,10 +536,10 @@ export default function TorqueTestPage() {
           </div>
         </IndustrialCard>
 
-        {/* 卡片2: 力值测量（合并实时力值 + 清零 + 校正） */}
+        {/* 卡片2: 力值测量 */}
         <IndustrialCard title="力值测量" borderLeftColor="#dc2626" className="flex-1">
           <div className="p-4 flex flex-col gap-3">
-            {/* 大字体实时力值 - 唯一显示位置 */}
+            {/* 大字体实时力值 */}
             <div className={`rounded-lg border-2 p-3 text-center ${
               scaleState.isConnected
                 ? 'bg-primary-fixed border-primary-fixed-dim'
@@ -421,7 +553,7 @@ export default function TorqueTestPage() {
               <p className="text-xs text-slate-500 mt-0.5 font-semibold">{unit}</p>
             </div>
 
-            {/* 清零按钮 - 紧凑样式 */}
+            {/* 清零按钮 */}
             <button
               className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={handleZero}
@@ -463,76 +595,113 @@ export default function TorqueTestPage() {
         </IndustrialCard>
       </div>
 
-      {/* ===== 右列 - 测试表格 + 漂移测试 + 操作 ===== */}
+      {/* ===== 右列 - 测试表格 + 漂移测试 ===== */}
       <div className="flex-1 min-w-0 flex flex-col gap-3">
-        {/* 单位选择栏 */}
-        <IndustrialCard borderLeftColor="#dc2626">
-          <div className="flex items-center gap-3 p-4">
-            <div className="flex-shrink-0 flex rounded-lg border border-slate-300 overflow-hidden">
-              <button
-                className={`px-3 py-2 text-sm font-semibold transition-colors ${
-                  unit === 'N'
-                    ? 'bg-primary text-on-primary'
-                    : 'bg-white text-slate-600 hover:bg-slate-50'
-                }`}
-                onClick={() => setUnit('N')}
-              >
-                转向力/N
-              </button>
-              <button
-                className={`px-3 py-2 text-sm font-semibold transition-colors border-l border-slate-300 ${
-                  unit === 'Nm'
-                    ? 'bg-primary text-on-primary'
-                    : 'bg-white text-slate-600 hover:bg-slate-50'
-                }`}
-                onClick={() => setUnit('Nm')}
-              >
-                力矩/Nm
-              </button>
-            </div>
-
-            <div className="flex-1" />
-
-            {/* 操作按钮 */}
-            <div className="flex items-center gap-2">
-              {!isAutoMeasuring ? (
-                <button
-                  className={`${primaryBtnClass} ${!scaleState.isConnected ? 'opacity-50 cursor-not-allowed' : ''}`}
-                  onClick={handleAutoMeasure}
-                  disabled={!scaleState.isConnected || !scaleState.data}
-                  title={!scaleState.isConnected ? '请先连接蓝牙称重设备' : ''}
-                >
-                  <span className="material-symbols-outlined text-sm">precision_manufacturing</span>
-                  自动测量
-                </button>
-              ) : (
-                <button className={criticalBtnClass} onClick={handleAutoStop}>
-                  <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
-                  停止测量
-                </button>
-              )}
-              <button className={criticalBtnClass} onClick={handleClear}>
-                <span className="material-symbols-outlined text-sm">delete_sweep</span>
-                清除
-              </button>
-              <button className={primaryBtnClass} onClick={handleExport}>
-                <span className="material-symbols-outlined text-sm">file_download</span>
-                导出记录
-              </button>
-            </div>
-          </div>
-        </IndustrialCard>
-
         {/* 转向力/力矩 表格 */}
         <IndustrialCard
           className="flex-1 flex flex-col min-h-0"
           borderLeftColor="#dc2626"
+          headerLeft={
+            <div className="flex items-center gap-2">
+              {/* 记录列表 */}
+              <div className="relative">
+                <button
+                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded transition-colors"
+                  onClick={() => setShowRecordList(!showRecordList)}
+                >
+                  <span className="material-symbols-outlined text-sm">history</span>
+                  记录 ({recordHistory.length})
+                </button>
+              {showRecordList && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowRecordList(false)} />
+                  <div className="absolute top-full left-0 mt-1 w-72 max-h-64 overflow-auto bg-white border border-slate-200 rounded-lg shadow-xl z-50">
+                    {recordHistory.length === 0 ? (
+                      <div className="px-4 py-6 text-center text-sm text-slate-400">
+                        暂无保存记录
+                      </div>
+                    ) : (
+                      <div className="py-1">
+                        {recordHistory.map((record, idx) => (
+                          <div
+                            key={record.id}
+                            className={`flex items-center justify-between px-3 py-2 hover:bg-slate-50 ${viewingRecordId === record.id ? 'bg-blue-50 border-l-2 border-l-blue-500' : ''}`}
+                          >
+                            <button
+                              className="flex-1 text-left text-sm text-slate-700 hover:text-primary"
+                              onClick={() => handleViewRecord(record)}
+                            >
+                              <span className="font-semibold">记录 {idx + 1}</span>
+                              <span className="ml-2 text-xs text-slate-400">{record.timestamp}</span>
+                            </button>
+                            <div className="flex items-center gap-1 ml-2">
+                              <button
+                                className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors"
+                                onClick={() => handleExportRecord(record)}
+                                title="导出此记录"
+                              >
+                                <span className="material-symbols-outlined text-base">file_download</span>
+                              </button>
+                              <button
+                                className="p-1 text-slate-400 hover:text-red-600 rounded transition-colors"
+                                onClick={() => handleDeleteRecord(record.id)}
+                                title="删除此记录"
+                              >
+                                <span className="material-symbols-outlined text-base">delete</span>
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+              </div>
+
+              {/* 单位切换 */}
+              <div className="flex rounded-md border border-slate-300 overflow-hidden">
+                <button
+                  className={`px-2.5 py-1 text-xs font-semibold transition-colors ${
+                    unit === 'N'
+                      ? 'bg-primary text-on-primary'
+                      : 'bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                  onClick={() => setUnit('N')}
+                >
+                  转向力/N
+                </button>
+                <button
+                  className={`px-2.5 py-1 text-xs font-semibold transition-colors border-l border-slate-300 ${
+                    unit === 'Nm'
+                      ? 'bg-primary text-on-primary'
+                      : 'bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                  onClick={() => setUnit('Nm')}
+                >
+                  力矩/Nm
+                </button>
+              </div>
+            </div>
+          }
           headerRight={
-            isAutoMeasuring ? (
-              <span className="inline-flex items-center gap-1.5 text-xs text-blue-600 font-semibold">
-                <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
-                自动测量中...
-              </span>
+            viewingRecordId ? (
+              <div className="flex items-center gap-2">
+                <button
+                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-green-600 bg-green-50 hover:bg-green-100 rounded transition-colors"
+                  onClick={handleSaveRecord}
+                >
+                  <span className="material-symbols-outlined text-sm">save</span>
+                  保存修改
+                </button>
+                <button
+                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded transition-colors"
+                  onClick={handleBackToEdit}
+                >
+                  <span className="material-symbols-outlined text-sm">edit</span>
+                  返回编辑
+                </button>
+              </div>
             ) : null
           }
         >
@@ -597,89 +766,102 @@ export default function TorqueTestPage() {
               </tbody>
             </table>
           </div>
-        </IndustrialCard>
 
-        {/* 漂移测试区 */}
-        <IndustrialCard className="flex-shrink-0" borderLeftColor="#dc2626">
-          <div className="p-4">
+          {/* 漂移测试区 */}
+          <div className="flex-shrink-0 px-4 py-3 border-t border-slate-200">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xs font-semibold text-slate-500 uppercase">漂移测试</span>
+              {isTimerRunning && (
+                <span className="text-xs text-blue-600 font-mono">
+                  {elapsedSeconds < 600 ? formatRemaining(600) : '已完成'}
+                </span>
+              )}
+              <div className="flex-1" />
+              {isTimerRunning ? (
+                <button
+                  className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1"
+                  onClick={cancelDriftTest}
+                >
+                  <span className="material-symbols-outlined text-sm">stop</span>
+                  取消
+                </button>
+              ) : (
+                <button
+                  className="px-3 py-1 bg-primary hover:bg-primary/90 text-on-primary text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={startDriftTest}
+                  disabled={!driftValues.min0}
+                >
+                  <span className="material-symbols-outlined text-sm">play_arrow</span>
+                  启动
+                </button>
+              )}
+            </div>
             <div className="grid grid-cols-4 gap-3">
               {/* 0min */}
               <div>
-                <div className="bg-primary text-on-primary px-3 py-1.5 rounded-t-lg font-semibold text-sm">0min</div>
-                <div className="border border-t-0 border-slate-200 rounded-b-lg p-2 bg-white">
-                  <NumericInput
-                    className={disabledInputClass.replace('bg-slate-100', 'bg-white').replace('text-slate-400 cursor-not-allowed', 'text-slate-700')}
-                    value={driftValues.min0}
-                    onChange={val => setDriftValues(prev => ({ ...prev, min0: val }))}
-                    placeholder="录入值"
-                    title="0min"
-                  />
-                  <button
-                    className={`${primaryBtnClass} w-full mt-2 text-xs`}
-                    onClick={startDriftTest}
-                    disabled={isTimerRunning || !driftValues.min0}
-                  >
-                    <span className="material-symbols-outlined text-sm">play_arrow</span>
-                    启动
-                  </button>
-                </div>
+                <label className="text-xs font-semibold text-slate-500 block mb-1">0min</label>
+                <NumericInput
+                  className={inputClass}
+                  value={driftValues.min0}
+                  onChange={val => setDriftValues({ ...driftValues, min0: val })}
+                  placeholder="录入值"
+                  title="0min"
+                />
               </div>
-
               {/* 5min */}
               <div>
-                <div className="bg-primary text-on-primary px-3 py-1.5 rounded-t-lg font-semibold text-sm flex items-center justify-between">
-                  <span>5min</span>
-                  {isTimerRunning && !canEdit5min && (
-                    <span className="text-xs font-mono opacity-80">({formatRemaining(300)})</span>
-                  )}
-                  {canEdit5min && <span className="text-xs opacity-80">✓</span>}
-                </div>
-                <div className="border border-t-0 border-slate-200 rounded-b-lg p-2 bg-white">
-                  <NumericInput
-                    className={canEdit5min ? disabledInputClass.replace('bg-slate-100', 'bg-white').replace('text-slate-400 cursor-not-allowed', 'text-slate-700') : disabledInputClass}
-                    value={driftValues.min5}
-                    onChange={val => setDriftValues(prev => ({ ...prev, min5: val }))}
-                    disabled={!canEdit5min}
-                    placeholder={canEdit5min ? '录入值' : '等待中...'}
-                    title="5min"
-                  />
-                </div>
+                <label className="text-xs font-semibold text-slate-500 flex items-center gap-1 mb-1">
+                  5min
+                  {isTimerRunning && !canEdit5min && <span className="text-xs font-mono text-blue-500">({formatRemaining(300)})</span>}
+                  {canEdit5min && <span className="text-emerald-500">✓</span>}
+                </label>
+                <NumericInput
+                  className={canEdit5min ? inputClass : disabledInputClass}
+                  value={driftValues.min5}
+                  onChange={val => setDriftValues({ ...driftValues, min5: val })}
+                  disabled={!canEdit5min}
+                  placeholder={canEdit5min ? '录入值' : '等待中...'}
+                  title="5min"
+                />
               </div>
-
               {/* 10min */}
               <div>
-                <div className="bg-primary text-on-primary px-3 py-1.5 rounded-t-lg font-semibold text-sm flex items-center justify-between">
-                  <span>10min</span>
-                  {isTimerRunning && !canEdit10min && (
-                    <span className="text-xs font-mono opacity-80">({formatRemaining(600)})</span>
-                  )}
-                  {canEdit10min && <span className="text-xs opacity-80">✓</span>}
-                </div>
-                <div className="border border-t-0 border-slate-200 rounded-b-lg p-2 bg-white">
-                  <NumericInput
-                    className={canEdit10min ? disabledInputClass.replace('bg-slate-100', 'bg-white').replace('text-slate-400 cursor-not-allowed', 'text-slate-700') : disabledInputClass}
-                    value={driftValues.min10}
-                    onChange={val => setDriftValues(prev => ({ ...prev, min10: val }))}
-                    disabled={!canEdit10min}
-                    placeholder={canEdit10min ? '录入值' : '等待中...'}
-                    title="10min"
-                  />
-                </div>
+                <label className="text-xs font-semibold text-slate-500 flex items-center gap-1 mb-1">
+                  10min
+                  {isTimerRunning && !canEdit10min && <span className="text-xs font-mono text-blue-500">({formatRemaining(600)})</span>}
+                  {canEdit10min && <span className="text-emerald-500">✓</span>}
+                </label>
+                <NumericInput
+                  className={canEdit10min ? inputClass : disabledInputClass}
+                  value={driftValues.min10}
+                  onChange={val => setDriftValues({ ...driftValues, min10: val })}
+                  disabled={!canEdit10min}
+                  placeholder={canEdit10min ? '录入值' : '等待中...'}
+                  title="10min"
+                />
               </div>
-
-              {/* 漂移 */}
+              {/* 漂移结果 */}
               <div>
-                <div className="bg-primary text-on-primary px-3 py-1.5 rounded-t-lg font-semibold text-sm">漂移</div>
-                <div className="border border-t-0 border-slate-200 rounded-b-lg p-2 bg-white">
-                  <input
-                    className={disabledInputClass}
-                    value={driftResult}
-                    disabled
-                    placeholder="自动计算"
-                  />
-                </div>
+                <label className="text-xs font-semibold text-slate-500 block mb-1">漂移</label>
+                <input className={disabledInputClass} value={driftResult} disabled placeholder="自动计算" />
               </div>
             </div>
+          </div>
+
+          {/* 底部按钮区 */}
+          <div className="flex-shrink-0 px-4 pb-4 flex gap-1.5">
+            <button className={criticalBtnClass} onClick={handleClear}>
+              <span className="material-symbols-outlined text-sm">delete_sweep</span>
+              清除
+            </button>
+            <button className={primaryBtnClass} onClick={handleAutoRecord}>
+              <span className="material-symbols-outlined text-sm">save</span>
+              记录
+            </button>
+            <button className={primaryBtnClass} onClick={handleExport}>
+              <span className="material-symbols-outlined text-sm">file_download</span>
+              导出
+            </button>
           </div>
         </IndustrialCard>
       </div>

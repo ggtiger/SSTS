@@ -254,32 +254,7 @@ export default function DebugPage() {
               </div>
               <Button variant="primary" icon="my_location" onClick={handleMoveTo}>移动</Button>
             </div>
-            {/* Fine-tune buttons */}
-            <div className="flex gap-1">
-              {[
-                { offset: -0.007, label: '-0.007°' },
-                { offset: -0.005, label: '-0.005°' },
-                { offset: -0.003, label: '-0.003°' },
-                { offset: 0.003, label: '+0.003°' },
-                { offset: 0.005, label: '+0.005°' },
-                { offset: 0.007, label: '+0.007°' },
-              ].map(({ offset, label }) => (
-                <button
-                  key={label}
-                  className={`flex-1 px-1 py-1 text-[10px] font-mono rounded border transition-colors ${
-                    offset < 0
-                      ? 'text-red-600 border-red-200 hover:bg-red-50 active:bg-red-100'
-                      : 'text-emerald-600 border-emerald-200 hover:bg-emerald-50 active:bg-emerald-100'
-                  }`}
-                  onClick={() => {
-                    const currentAngle = state.position / 1000
-                    actions.moveTo(currentAngle + offset)
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+
             {/* JOG */}
             <div>
               <label className="text-xs text-slate-500 mb-1 block">JOG 控制</label>
