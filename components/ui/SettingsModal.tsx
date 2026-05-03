@@ -186,6 +186,25 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                     />
                   </div>
 
+                  {/* 校准参数 */}
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">重力加速度 g (m/s²)</label>
+                    <input
+                      type="number"
+                      value={config.scale.gravityAcceleration}
+                      onChange={(e) =>
+                        setConfig((c: AppConfig) => ({
+                          ...c,
+                          scale: { ...c.scale, gravityAcceleration: parseFloat(e.target.value) || 0 },
+                        }))
+                      }
+                      className={inputClass}
+                      step="0.00001"
+                      placeholder="9.80000"
+                    />
+                    <p className="mt-1 text-xs text-slate-400">用于制动测试中加速度计算，默认 9.80000</p>
+                  </div>
+
                   {/* 高级设置（可折叠） */}
                   <div className="pt-2">
                     <button

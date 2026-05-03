@@ -1,2 +1,5 @@
 export { useAppStore } from './app-store'
 export { useUpdaterStore } from './updater-store'
+export { useBrakeStore } from './brake-store'
+export type { BrakeMeasureRow, BrakeRecord } from './brake-store'
+export { initialBrakeData, defaultSummaryTitles } from './brake-store'

@@ -257,6 +257,7 @@ export default function SteeringTestPage() {
                 onChange={setFreeAngle}
                 placeholder="0.000"
                 title="设定值°"
+                maxDecimalPlaces={3}
               />
             </div>
 

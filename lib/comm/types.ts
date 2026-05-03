@@ -103,3 +103,39 @@ export const DEFAULT_DEVICE_STATE: DeviceState = {
   inputs: [false, false, false, false],
   relay_states: [false, false, false, false],
 };
+
+// ===== 蓝牙称重模块类型 =====
+
+/** 蓝牙称重设备信息 */
+export interface ScaleDeviceInfo {
+  name: string;
+  address: string;
+  rssi: number | null;
+}
+
+/** 称重数据（与 Rust ScaleData 对应） */
+export interface ScaleData {
+  weightMg: number;    // 原始重量(mg)
+  weightG: number;     // 重量(g)
+  weightN: number;     // 力值(N) = weightG / 1000 * 9.80665
+  adCode: number;      // AD内码
+  status: number;      // 状态字节
+  timestamp: number;   // 时间戳
+}
+
+/** 称重设备连接状态（与 Rust ScaleConnectionState 对应） */
+export interface ScaleConnectionState {
+  isScanning: boolean;
+  isConnected: boolean;
+  deviceName: string;
+  deviceAddress: string;
+}
+
+/** 前端称重模块完整状态 */
+export interface ScaleState {
+  isScanning: boolean;
+  isConnected: boolean;
+  deviceName: string;
+  deviceAddress: string;
+  data: ScaleData | null;
+}

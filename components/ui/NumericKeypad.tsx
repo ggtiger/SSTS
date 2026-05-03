@@ -12,6 +12,7 @@ export interface NumericKeypadProps {
   allowNegative?: boolean
   allowDecimal?: boolean
   allowMultipleDots?: boolean // IP 模式：允许多个小数点
+  maxDecimalPlaces?: number
   anchorRect?: DOMRect | null
 }
 
@@ -25,14 +26,26 @@ export default function NumericKeypad({
   allowNegative = true,
   allowDecimal = true,
   allowMultipleDots = false,
+  maxDecimalPlaces,
 }: NumericKeypadProps) {
+  const formatAndConfirm = useCallback((val: string) => {
+    if (maxDecimalPlaces !== undefined && !allowMultipleDots && val !== '') {
+      const num = parseFloat(val)
+      if (!isNaN(num)) {
+        onConfirm(num.toFixed(maxDecimalPlaces))
+        return
+      }
+    }
+    onConfirm(val)
+  }, [maxDecimalPlaces, allowMultipleDots, onConfirm])
+
   // Keyboard support
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (!isOpen) return
       if (e.key === 'Enter') {
         e.preventDefault()
-        onConfirm(value)
+        formatAndConfirm(value)
       } else if (e.key === 'Escape') {
         e.preventDefault()
         onClose()
@@ -41,6 +54,15 @@ export default function NumericKeypad({
         onValueChange(value.slice(0, -1))
       } else if (/^[0-9]$/.test(e.key)) {
         e.preventDefault()
+        if (maxDecimalPlaces !== undefined && !allowMultipleDots) {
+          const dotIndex = value.indexOf('.')
+          if (dotIndex !== -1) {
+            const decimalPart = value.substring(dotIndex + 1)
+            if (decimalPart.length >= maxDecimalPlaces) {
+              return
+            }
+          }
+        }
         onValueChange(value + e.key)
       } else if (e.key === '.' && allowDecimal) {
         e.preventDefault()
@@ -56,7 +78,7 @@ export default function NumericKeypad({
         }
       }
     },
-    [isOpen, value, onValueChange, onConfirm, onClose, allowDecimal, allowNegative, allowMultipleDots]
+    [isOpen, value, onValueChange, onClose, allowDecimal, allowNegative, allowMultipleDots, maxDecimalPlaces, formatAndConfirm]
   )
 
   useEffect(() => {
@@ -67,6 +89,15 @@ export default function NumericKeypad({
   if (!isOpen) return null
 
   const handleDigit = (digit: string) => {
+    if (maxDecimalPlaces !== undefined && !allowMultipleDots) {
+      const dotIndex = value.indexOf('.')
+      if (dotIndex !== -1) {
+        const decimalPart = value.substring(dotIndex + 1)
+        if (decimalPart.length >= maxDecimalPlaces) {
+          return
+        }
+      }
+    }
     onValueChange(value + digit)
   }
 
@@ -94,7 +125,7 @@ export default function NumericKeypad({
   }
 
   const handleConfirm = () => {
-    onConfirm(value)
+    formatAndConfirm(value)
   }
 
   const handleOverlayClick = (e: React.MouseEvent) => {
@@ -122,13 +153,24 @@ export default function NumericKeypad({
         className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-[340px] overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Display area */}
-        <div className="px-5 pt-5 pb-3">
-          {title && (
-            <div className="text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
-              {title}
-            </div>
-          )}
+        {/* Header with close button */}
+        <div className="px-5 pt-4 pb-3">
+          <div className="flex items-center justify-between mb-1.5">
+            {title ? (
+              <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                {title}
+              </div>
+            ) : (
+              <div />
+            )}
+            <button
+              className="flex items-center justify-center w-8 h-8 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 active:bg-slate-200 transition-all select-none"
+              onClick={onClose}
+              aria-label="关闭"
+            >
+              <span className="material-symbols-outlined text-xl">close</span>
+            </button>
+          </div>
           <div className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-right">
             <span className="text-2xl font-mono font-bold text-slate-800 tracking-wide">
               {value || <span className="text-slate-300">0</span>}

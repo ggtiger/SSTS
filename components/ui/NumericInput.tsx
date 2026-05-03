@@ -13,6 +13,7 @@ export interface NumericInputProps {
   allowNegative?: boolean
   allowDecimal?: boolean
   allowMultipleDots?: boolean
+  maxDecimalPlaces?: number
 }
 
 export default function NumericInput({
@@ -25,6 +26,7 @@ export default function NumericInput({
   allowNegative = true,
   allowDecimal = true,
   allowMultipleDots = false,
+  maxDecimalPlaces,
 }: NumericInputProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [tempValue, setTempValue] = useState('')
@@ -68,6 +70,7 @@ export default function NumericInput({
         allowNegative={allowNegative}
         allowDecimal={allowDecimal}
         allowMultipleDots={allowMultipleDots}
+        maxDecimalPlaces={maxDecimalPlaces}
       />
     </>
   )

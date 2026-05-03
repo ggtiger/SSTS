@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;

@@ -14,6 +14,13 @@ export interface AppConfig {
     closeToTray: boolean
     theme: string
   }
+  scale: {
+    lastDeviceAddress: string
+    autoReconnect: boolean
+    displayUnit: 'N' | 'g' | 'kg'
+    sampleRate: number
+    gravityAcceleration: number
+  }
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -29,6 +36,13 @@ export const DEFAULT_CONFIG: AppConfig = {
     closeToTray: false,
     theme: 'light',
   },
+  scale: {
+    lastDeviceAddress: '',
+    autoReconnect: false,
+    displayUnit: 'N',
+    sampleRate: 10,
+    gravityAcceleration: 9.80000,
+  },
 }
 
 const STORAGE_KEY = 'vacdevice-config'
@@ -39,6 +53,7 @@ function mergeConfig(partial: Partial<AppConfig>): AppConfig {
     device: { ...DEFAULT_CONFIG.device, ...partial.device },
     update: { ...DEFAULT_CONFIG.update, ...partial.update },
     app: { ...DEFAULT_CONFIG.app, ...partial.app },
+    scale: { ...DEFAULT_CONFIG.scale, ...partial.scale },
   }
 }
 

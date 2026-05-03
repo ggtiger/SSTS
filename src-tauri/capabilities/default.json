@@ -36,6 +36,9 @@
     "updater:default",
     "notification:default",
     "os:default",
-    "process:default"
+    "process:default",
+    "sql:default",
+    "sql:allow-execute",
+    "sql:allow-select"
   ]
 }

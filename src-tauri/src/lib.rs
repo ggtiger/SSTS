@@ -1338,6 +1338,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_sql::Builder::default().build())
         // 注册自定义协议 splashpage:// 用于提供嵌入的 splash HTML
         .register_uri_scheme_protocol("splashpage", |_ctx, request| {
             let path = request.uri().path();
@@ -1366,6 +1367,7 @@ pub fn run() {
             }
         })
         .manage(comm::CommManager::new())
+        .manage(comm::scale_commands::ScaleState::default())
         .setup(move |app| {
             // Windows: 移除原生标题栏，使用前端模拟红绿灯按钮
             #[cfg(target_os = "windows")]
@@ -1485,6 +1487,12 @@ pub fn run() {
             comm::device_relay_on, comm::device_relay_off, comm::device_relay_all_off,
             comm::device_read_input, comm::device_stop_io_test,
             comm::device_set_params, comm::device_send_raw, comm::device_get_debug_log,
+            comm::scale_commands::scale_scan,
+            comm::scale_commands::scale_connect,
+            comm::scale_commands::scale_disconnect,
+            comm::scale_commands::scale_zero,
+            comm::scale_commands::scale_calibrate,
+            comm::scale_commands::scale_connection_state,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

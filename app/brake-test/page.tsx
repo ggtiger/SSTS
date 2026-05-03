@@ -8,10 +8,14 @@ import IndustrialCard from '@/components/ui/IndustrialCard'
 import MeasurementTable from '@/components/ui/MeasurementTable'
 import type { MeasurementRow, ColumnGroup } from '@/components/ui/MeasurementTable'
 import NumericInput from '@/components/ui/NumericInput'
+import { isTauri } from '@/lib/tauri'
+import { useBrakeStore, initialBrakeData, defaultSummaryTitles } from '@/lib/store/brake-store'
+import type { BrakeMeasureRow, BrakeRecord } from '@/lib/store/brake-store'
+import { initBrakeDB, saveBrakeRecord, getAllBrakeRecords, updateBrakeRecord, deleteBrakeRecord } from '@/lib/db/brake-records'
 
 const inputClass = "w-full px-2 py-1.5 bg-white border border-slate-300 rounded text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary font-mono"
-const primaryBtnClass = "flex-1 px-4 py-2 bg-primary hover:bg-primary/90 text-on-primary text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-1.5"
-const criticalBtnClass = "flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-1.5"
+const primaryBtnClass = "flex-1 px-3 py-1.5 bg-primary hover:bg-primary/90 text-on-primary text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-1"
+const criticalBtnClass = "flex-1 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-1"
 
 // 制动测试列组配置
 const brakeColumnGroups: ColumnGroup[] = [
@@ -19,20 +23,7 @@ const brakeColumnGroups: ColumnGroup[] = [
   { label: '仪器示值', columns: ['1', '2', '3'], editable: true },
 ]
 
-interface BrakeMeasureRow {
-  id: string
-  label: string
-  labelValue: string
-  values: string[] // [加速度, 示值1, 示值2, 示值3]
-}
 
-const initialBrakeData: BrakeMeasureRow[] = [
-  { id: 'A1', label: 'A1', labelValue: '', values: ['', '', '', ''] },
-  { id: 'A2', label: 'A2', labelValue: '', values: ['', '', '', ''] },
-  { id: 'A3', label: 'A3', labelValue: '', values: ['', '', '', ''] },
-  { id: 'A4', label: 'A4', labelValue: '', values: ['', '', '', ''] },
-  { id: 'A5', label: 'A5', labelValue: '', values: ['', '', '', ''] },
-]
 
 /** 水平仪气泡图 */
 function BubbleLevel({ inclineX, inclineY }: { inclineX: number; inclineY: number }) {
@@ -85,16 +76,89 @@ export default function BrakeTestPage() {
     if (toastTimer.current) clearTimeout(toastTimer.current)
   }
 
+  // 从 Zustand Store 获取持久化状态
+  const {
+    measureData, setMeasureData, updateMeasureValue, updateMeasureLabelValue, resetMeasureData,
+    summaryTitles, setSummaryTitles, updateSummaryTitle,
+    summaryValues, setSummaryValues, updateSummaryValue,
+    freeAngle, setFreeAngle,
+    selectedRow, setSelectedRow,
+    selectedSummaryCol, setSelectedSummaryCol,
+    recordHistory, setRecordHistory,
+    viewingRecordId, setViewingRecordId,
+  } = useBrakeStore()
+
+  // 页面 mount 时初始化 DB 并加载记录
+  useEffect(() => {
+    const loadRecords = async () => {
+      try {
+        await initBrakeDB()
+        const records = await getAllBrakeRecords()
+        setRecordHistory(records)
+      } catch (err) {
+        console.error('加载记录失败:', err)
+      }
+    }
+    loadRecords()
+  }, [])
+
   // === 自由测量 ===
-  const [freeAngle, setFreeAngle] = useState('')
-  const [isFreeRunning, setIsFreeRunning] = useState(false)
+  const [freeMotorState, setFreeMotorState] = useState<'idle' | 'running' | 'paused'>('idle')
+  const freeMotorStateRef = useRef<'idle' | 'running' | 'paused'>('idle')
+  const freeTargetRef = useRef<number | null>(null)
+
+  const updateFreeMotorState = useCallback((s: 'idle' | 'running' | 'paused') => {
+    freeMotorStateRef.current = s
+    setFreeMotorState(s)
+  }, [])
 
   const handleFreeStart = async () => {
     const angle = parseFloat(freeAngle)
     if (isNaN(angle)) return
-    setIsFreeRunning(true)
-    await actions.moveTo(angle)
-    setIsFreeRunning(false)
+    freeTargetRef.current = angle
+    updateFreeMotorState('running')
+    abortRef.current = false
+    try {
+      await actions.moveTo(angle)
+      await waitForArrival()
+    } catch (err) {
+      console.error('自由测量启动出错:', err)
+    } finally {
+      if (freeMotorStateRef.current !== 'paused') {
+        updateFreeMotorState('idle')
+        freeTargetRef.current = null
+      }
+    }
+  }
+
+  const handleFreePause = async () => {
+    abortRef.current = true
+    updateFreeMotorState('paused')
+    await actions.emergencyStop()
+  }
+
+  const handleFreeResume = async () => {
+    if (freeTargetRef.current === null) return
+    updateFreeMotorState('running')
+    abortRef.current = false
+    try {
+      await actions.moveTo(freeTargetRef.current)
+      await waitForArrival()
+    } catch (err) {
+      console.error('自由测量继续出错:', err)
+    } finally {
+      if (freeMotorStateRef.current !== 'paused') {
+        updateFreeMotorState('idle')
+        freeTargetRef.current = null
+      }
+    }
+  }
+
+  const handleFreeStop = async () => {
+    abortRef.current = true
+    await actions.emergencyStop()
+    updateFreeMotorState('idle')
+    freeTargetRef.current = null
   }
 
   const handleLevel = async () => {
@@ -106,46 +170,117 @@ export default function BrakeTestPage() {
   }
 
   // === 表格记录 ===
-  const [measureData, setMeasureData] = useState<BrakeMeasureRow[]>(
-    initialBrakeData.map(r => ({ ...r, values: [...r.values] }))
-  )
   const [isAutoRunning, setIsAutoRunning] = useState(false)
   const [currentMeasureRow, setCurrentMeasureRow] = useState<string | null>(null)
 
-  // 实时数据展示（最近5次角度读数）
-  const [liveReadings, setLiveReadings] = useState<string[]>(['—', '—', '—', '—', '—'])
+  // 运动状态机: idle → running → paused → running → ... → idle
+  const [motorState, setMotorState] = useState<'idle' | 'running' | 'paused'>('idle')
+  const motorStateRef = useRef<'idle' | 'running' | 'paused'>('idle')
+  const targetAngleRef = useRef<number | null>(null)
 
-  // 监听 position 变化，更新实时读数
-  const liveReadingsRef = useRef(liveReadings)
-  liveReadingsRef.current = liveReadings
+  const updateMotorState = useCallback((s: 'idle' | 'running' | 'paused') => {
+    motorStateRef.current = s
+    setMotorState(s)
+  }, [])
 
-  useEffect(() => {
-    if (state.position !== 0) {
-      const angle = Math.abs(pulsesToAngle(state.position)).toFixed(1)
-      setLiveReadings(prev => {
-        const next = [...prev.slice(1), `${angle}°`]
-        return next
-      })
+
+
+  // 全局运行状态：自由测量和表格启动互斥
+  const isAnyRunning = freeMotorState !== 'idle' || motorState !== 'idle'
+
+  const handleSelectRow = (rowId: string) => {
+    if (isAnyRunning) return
+    setSelectedRow(selectedRow === rowId ? null : rowId)
+    setSelectedSummaryCol(null)
+  }
+
+  const handleSelectSummaryCol = (colIndex: number) => {
+    if (isAnyRunning) return
+    setSelectedSummaryCol(selectedSummaryCol === colIndex ? null : colIndex)
+    setSelectedRow(null)
+  }
+
+  const handleStartMove = async () => {
+    let targetAngle: number | null = null
+
+    if (selectedRow) {
+      const row = measureData.find(r => r.id === selectedRow)
+      if (row) targetAngle = parseFloat(row.labelValue)
+    } else if (selectedSummaryCol !== null) {
+      const title = summaryTitles[selectedSummaryCol]
+      targetAngle = parseFloat(title.replace('°', ''))
     }
-  }, [state.position])
+
+    if (targetAngle === null || isNaN(targetAngle)) return
+
+    targetAngleRef.current = targetAngle
+    updateMotorState('running')
+    setIsAutoRunning(true)
+    abortRef.current = false
+
+    try {
+      await actions.moveTo(targetAngle)
+      await waitForArrival()
+    } catch (err) {
+      console.error('启动出错:', err)
+    } finally {
+      if (motorStateRef.current !== 'paused') {
+        updateMotorState('idle')
+        setIsAutoRunning(false)
+        targetAngleRef.current = null
+      }
+    }
+  }
+
+  const handlePause = async () => {
+    abortRef.current = true
+    updateMotorState('paused')
+    await actions.emergencyStop()
+  }
+
+  const handleResume = async () => {
+    if (targetAngleRef.current === null) return
+    updateMotorState('running')
+    abortRef.current = false
+    try {
+      await actions.moveTo(targetAngleRef.current)
+      await waitForArrival()
+    } catch (err) {
+      console.error('继续出错:', err)
+    } finally {
+      if (motorStateRef.current !== 'paused') {
+        updateMotorState('idle')
+        setIsAutoRunning(false)
+        targetAngleRef.current = null
+      }
+    }
+  }
+
+  const handleStop = async () => {
+    abortRef.current = true
+    await actions.emergencyStop()
+    updateMotorState('idle')
+    setIsAutoRunning(false)
+    targetAngleRef.current = null
+  }
 
   const handleCellEdit = useCallback((rowId: string, colIndex: number, value: string) => {
-    setMeasureData(prev =>
-      prev.map(row =>
-        row.id === rowId
-          ? { ...row, values: row.values.map((v, i) => (i === colIndex ? value : v)) }
-          : row
-      )
-    )
-  }, [])
+    updateMeasureValue(rowId, colIndex, value)
+  }, [updateMeasureValue])
 
   const handleLabelEdit = useCallback((rowId: string, value: string) => {
-    setMeasureData(prev =>
-      prev.map(row =>
-        row.id === rowId ? { ...row, labelValue: value } : row
-      )
-    )
-  }, [])
+    updateMeasureLabelValue(rowId, value)
+    // 自动计算加速度
+    const angle = parseFloat(value)
+    if (!isNaN(angle)) {
+      const g = 9.80665
+      const radians = angle * Math.PI / 180
+      const accel = Math.sin(radians) * g
+      updateMeasureValue(rowId, 0, accel.toFixed(3))
+    } else {
+      updateMeasureValue(rowId, 0, '')
+    }
+  }, [updateMeasureLabelValue, updateMeasureValue])
 
   /** 等待电机到位 */
   const waitForArrival = (timeoutMs = 30000): Promise<boolean> => {
@@ -212,47 +347,163 @@ export default function BrakeTestPage() {
   }
 
   const handleAutoClear = () => {
-    setMeasureData(initialBrakeData.map(r => ({ ...r, values: [...r.values], labelValue: '' })))
+    resetMeasureData()
     setCurrentMeasureRow(null)
     setIsAutoRunning(false)
-    setLiveReadings(['—', '—', '—', '—', '—'])
+    setSummaryTitles([...defaultSummaryTitles])
+    setSummaryValues(['', '', '', '', ''])
+    setSelectedRow(null)
+    setSelectedSummaryCol(null)
+    setViewingRecordId(null)
   }
 
   // === 数据记录历史 ===
-  const [recordHistory, setRecordHistory] = useState<BrakeMeasureRow[][]>([])
-  
-  const handleAutoRecord = () => {
-    setRecordHistory((prev: BrakeMeasureRow[][]) => [...prev, measureData.map((r: BrakeMeasureRow) => ({ ...r, values: [...r.values] }))])
-    setToastMsg('数据已记录')
-    if (toastTimer.current) clearTimeout(toastTimer.current)
-    toastTimer.current = setTimeout(() => setToastMsg(null), 2000)
+  const [showRecordList, setShowRecordList] = useState(false)
+
+  const handleAutoRecord = async () => {
+    try {
+      const timestamp = new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      const newId = await saveBrakeRecord({
+        timestamp,
+        measureData: measureData.map(r => ({ ...r, values: [...r.values] })),
+        summaryTitles: [...summaryTitles],
+        summaryValues: [...summaryValues],
+      })
+      // 重新加载记录列表
+      const records = await getAllBrakeRecords()
+      setRecordHistory(records)
+      setToastMsg('数据已记录')
+      if (toastTimer.current) clearTimeout(toastTimer.current)
+      toastTimer.current = setTimeout(() => setToastMsg(null), 2000)
+    } catch (err) {
+      console.error('记录保存失败:', err)
+      setToastMsg('记录保存失败')
+      if (toastTimer.current) clearTimeout(toastTimer.current)
+      toastTimer.current = setTimeout(() => setToastMsg(null), 3000)
+    }
   }
-  
-  const handleExport = () => {
+
+  const handleViewRecord = (record: BrakeRecord) => {
+    setMeasureData(record.measureData.map(r => ({ ...r, values: [...r.values] })))
+    setSummaryTitles([...record.summaryTitles])
+    setSummaryValues([...record.summaryValues])
+    setViewingRecordId(record.id)
+    setShowRecordList(false)
+  }
+
+  const handleBackToEdit = () => {
+    setViewingRecordId(null)
+    handleAutoClear()
+  }
+
+  const generateCSV = (data: BrakeMeasureRow[], titles: string[], values: string[]) => {
     let csv = '行号,标准点°,加速度(m/s²),示值1,示值2,示值3\n'
-    for (const row of measureData) {
+    for (const row of data) {
       csv += `${row.label},${row.labelValue},${row.values.join(',')}\n`
     }
-    if (recordHistory.length > 0) {
-      csv += '\n--- 历史记录 ---\n'
-      recordHistory.forEach((record: BrakeMeasureRow[], idx: number) => {
-        csv += `\n记录 ${idx + 1}\n`
-        csv += '行号,标准点°,加速度(m/s²),示值1,示值2,示值3\n'
-        for (const row of record) {
-          csv += `${row.label},${row.labelValue},${row.values.join(',')}\n`
-        }
-      })
+    csv += '\n'
+    csv += titles.join(',') + '\n'
+    csv += values.join(',') + '\n'
+    return csv
+  }
+
+  const handleExport = async () => {
+    const csv = generateCSV(measureData, summaryTitles, summaryValues)
+
+    if (isTauri()) {
+      try {
+        const { save } = await import('@tauri-apps/plugin-dialog')
+        const { invoke } = await import('@tauri-apps/api/core')
+        const filePath = await save({
+          defaultPath: `制动测试_${new Date().toISOString().slice(0, 10)}.csv`,
+          filters: [{ name: 'CSV', extensions: ['csv'] }]
+        })
+        if (!filePath) return
+        const content = new TextEncoder().encode('\uFEFF' + csv)
+        await invoke('save_file_content', { path: filePath, content: Array.from(content) })
+        setToastMsg('数据已导出')
+        if (toastTimer.current) clearTimeout(toastTimer.current)
+        toastTimer.current = setTimeout(() => setToastMsg(null), 2000)
+      } catch (err) {
+        console.error('导出失败:', err)
+        setToastMsg('导出失败')
+        if (toastTimer.current) clearTimeout(toastTimer.current)
+        toastTimer.current = setTimeout(() => setToastMsg(null), 3000)
+      }
+    } else {
+      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `制动测试_${new Date().toISOString().slice(0, 10)}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+      setToastMsg('数据已导出')
+      if (toastTimer.current) clearTimeout(toastTimer.current)
+      toastTimer.current = setTimeout(() => setToastMsg(null), 2000)
     }
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `制动测试_${new Date().toISOString().slice(0, 10)}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-    setToastMsg('数据已导出')
-    if (toastTimer.current) clearTimeout(toastTimer.current)
-    toastTimer.current = setTimeout(() => setToastMsg(null), 2000)
+  }
+
+  const handleExportRecord = async (record: BrakeRecord) => {
+    const csv = generateCSV(record.measureData, record.summaryTitles, record.summaryValues)
+
+    if (isTauri()) {
+      try {
+        const { save } = await import('@tauri-apps/plugin-dialog')
+        const { invoke } = await import('@tauri-apps/api/core')
+        const filePath = await save({
+          defaultPath: `制动测试_${record.timestamp.replace(/[\/\s:]/g, '-')}.csv`,
+          filters: [{ name: 'CSV', extensions: ['csv'] }]
+        })
+        if (!filePath) return
+        const content = new TextEncoder().encode('\uFEFF' + csv)
+        await invoke('save_file_content', { path: filePath, content: Array.from(content) })
+      } catch (err) {
+        console.error('导出失败:', err)
+      }
+    } else {
+      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `制动测试_${record.timestamp.replace(/[\/\s:]/g, '-')}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    }
+  }
+
+  const handleDeleteRecord = async (recordId: number) => {
+    try {
+      await deleteBrakeRecord(recordId)
+      const records = await getAllBrakeRecords()
+      setRecordHistory(records)
+      if (viewingRecordId === recordId) {
+        handleBackToEdit()
+      }
+    } catch (err) {
+      console.error('删除记录失败:', err)
+    }
+  }
+
+  const handleSaveRecord = async () => {
+    if (viewingRecordId === null) return
+    try {
+      await updateBrakeRecord(viewingRecordId, {
+        measureData: measureData.map(r => ({ ...r, values: [...r.values] })),
+        summaryTitles: [...summaryTitles],
+        summaryValues: [...summaryValues],
+      })
+      const records = await getAllBrakeRecords()
+      setRecordHistory(records)
+      setToastMsg('修改已保存')
+      if (toastTimer.current) clearTimeout(toastTimer.current)
+      toastTimer.current = setTimeout(() => setToastMsg(null), 2000)
+    } catch (err) {
+      console.error('保存修改失败:', err)
+      setToastMsg('保存失败')
+      if (toastTimer.current) clearTimeout(toastTimer.current)
+      toastTimer.current = setTimeout(() => setToastMsg(null), 3000)
+    }
   }
   
   const handleAutoStop = () => {
@@ -295,27 +546,58 @@ export default function BrakeTestPage() {
                 onChange={setFreeAngle}
                 placeholder="0.000"
                 title="设定值°"
+                maxDecimalPlaces={3}
               />
             </div>
 
-            {/* 启动按钮 */}
-            <button
-              className={`${primaryBtnClass} !flex-none py-2.5`}
-              onClick={handleFreeStart}
-              disabled={isFreeRunning}
-            >
-              {isFreeRunning ? (
-                <>
-                  <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
-                  运行中...
-                </>
+            {/* 启动/暂停/结束 按钮 */}
+            <div className="flex gap-1.5">
+              {freeMotorState === 'idle' ? (
+                (() => {
+                  const hasValid = !isNaN(parseFloat(freeAngle))
+                  const isFreeDisabled = !hasValid || motorState !== 'idle'
+                  const freeDisabledReason = motorState !== 'idle'
+                    ? '表格启动运行中'
+                    : '请先输入有效角度值'
+                  return (
+                    <div className="relative flex-1 group">
+                      <button
+                        className={`${primaryBtnClass} w-full whitespace-nowrap ${isFreeDisabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        onClick={handleFreeStart}
+                        disabled={isFreeDisabled}
+                      >
+                        <span className="material-symbols-outlined text-sm">play_arrow</span>
+                        启动
+                      </button>
+                      {isFreeDisabled && (
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-slate-800 text-white text-xs rounded-md whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
+                          {freeDisabledReason}
+                          <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800" />
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()
               ) : (
                 <>
-                  <span className="material-symbols-outlined text-sm">play_arrow</span>
-                  启动
+                  {freeMotorState === 'running' ? (
+                    <button className={`${primaryBtnClass} !bg-amber-500 hover:!bg-amber-600`} onClick={handleFreePause}>
+                      <span className="material-symbols-outlined text-sm">pause</span>
+                      暂停
+                    </button>
+                  ) : (
+                    <button className={primaryBtnClass} onClick={handleFreeResume}>
+                      <span className="material-symbols-outlined text-sm">play_arrow</span>
+                      继续
+                    </button>
+                  )}
+                  <button className={criticalBtnClass} onClick={handleFreeStop}>
+                    <span className="material-symbols-outlined text-sm">stop</span>
+                    结束
+                  </button>
                 </>
               )}
-            </button>
+            </div>
           </div>
         </IndustrialCard>
 
@@ -364,8 +646,81 @@ export default function BrakeTestPage() {
           title="表格记录"
           borderLeftColor="#dc2626"
           className="flex-1 flex flex-col"
+          headerLeft={
+            <div className="relative">
+              <button
+                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded transition-colors"
+                onClick={() => setShowRecordList(!showRecordList)}
+              >
+                <span className="material-symbols-outlined text-sm">history</span>
+                记录 ({recordHistory.length})
+              </button>
+              {showRecordList && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowRecordList(false)} />
+                  <div className="absolute top-full left-0 mt-1 w-72 max-h-64 overflow-auto bg-white border border-slate-200 rounded-lg shadow-xl z-50">
+                    {recordHistory.length === 0 ? (
+                      <div className="px-4 py-6 text-center text-sm text-slate-400">
+                        暂无保存记录
+                      </div>
+                    ) : (
+                      <div className="py-1">
+                        {recordHistory.map((record, idx) => (
+                          <div
+                            key={record.id}
+                            className={`flex items-center justify-between px-3 py-2 hover:bg-slate-50 ${viewingRecordId === record.id ? 'bg-blue-50 border-l-2 border-l-blue-500' : ''}`}
+                          >
+                            <button
+                              className="flex-1 text-left text-sm text-slate-700 hover:text-primary"
+                              onClick={() => handleViewRecord(record)}
+                            >
+                              <span className="font-semibold">记录 {idx + 1}</span>
+                              <span className="ml-2 text-xs text-slate-400">{record.timestamp}</span>
+                            </button>
+                            <div className="flex items-center gap-1 ml-2">
+                              <button
+                                className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors"
+                                onClick={() => handleExportRecord(record)}
+                                title="导出此记录"
+                              >
+                                <span className="material-symbols-outlined text-base">file_download</span>
+                              </button>
+                              <button
+                                className="p-1 text-slate-400 hover:text-red-600 rounded transition-colors"
+                                onClick={() => handleDeleteRecord(record.id)}
+                                title="删除此记录"
+                              >
+                                <span className="material-symbols-outlined text-base">delete</span>
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          }
           headerRight={
-            isAutoRunning ? (
+            viewingRecordId ? (
+              <div className="flex items-center gap-2">
+                <button
+                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-green-600 bg-green-50 hover:bg-green-100 rounded transition-colors"
+                  onClick={handleSaveRecord}
+                >
+                  <span className="material-symbols-outlined text-sm">save</span>
+                  保存修改
+                </button>
+                <button
+                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded transition-colors"
+                  onClick={handleBackToEdit}
+                >
+                  <span className="material-symbols-outlined text-sm">edit</span>
+                  返回编辑
+                </button>
+              </div>
+            ) : isAutoRunning ? (
               <span className="inline-flex items-center gap-1.5 text-xs text-blue-600 font-semibold">
                 <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
                 测量中
@@ -384,41 +739,137 @@ export default function BrakeTestPage() {
                 rows={tableRows}
                 onCellEdit={handleCellEdit}
                 onLabelEdit={handleLabelEdit}
-                highlightRow={currentMeasureRow}
+                highlightRow={isAutoRunning ? (currentMeasureRow || selectedRow) : selectedRow}
+                onRowClick={handleSelectRow}
               />
             </div>
 
-            {/* 实时数据展示条 */}
+            {/* 汇总数据表 */}
             <div className="flex-none px-4 pb-2">
-              <div className="flex gap-2">
-                {liveReadings.map((val: string, i: number) => (
-                  <div
-                    key={i}
-                    className="flex-1 px-2 py-3 bg-white border border-slate-300 rounded-lg text-center"
-                  >
-                    <span className="text-2xl font-mono font-bold text-slate-800">
-                      {val}
-                    </span>
-                  </div>
-                ))}
+              <div className="w-full">
+                <table className="w-full border-collapse text-sm table-fixed">
+                  <thead>
+                    <tr>
+                      {summaryTitles.map((title: string, i: number) => (
+                        <th
+                          key={i}
+                          className={`border border-slate-300 px-2 py-2 text-center cursor-pointer transition-colors ${
+                            selectedSummaryCol === i ? 'bg-teal-600 ring-2 ring-offset-1 ring-teal-400 shadow-lg scale-[1.02]' : 'bg-teal-400/80 hover:bg-teal-500/80'
+                          }`}
+                          onClick={(e) => {
+                            if ((e.target as HTMLElement).closest('input')) return
+                            handleSelectSummaryCol(i)
+                          }}
+                        >
+                          <div className="flex items-center justify-center gap-1">
+                            <span className={`flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+                              selectedSummaryCol === i ? 'bg-white border-white text-teal-600' : 'border-white/50 text-transparent hover:border-white/80'
+                            }`}>
+                              <span className="material-symbols-outlined" style={{ fontSize: '12px' }}>check</span>
+                            </span>
+                            <input
+                              type="text"
+                              value={title}
+                              onChange={(e) => updateSummaryTitle(i, e.target.value)}
+                              className="flex-1 min-w-0 bg-transparent text-center text-white text-sm font-semibold font-mono outline-none placeholder-white/60"
+                              placeholder="—"
+                            />
+                          </div>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      {summaryValues.map((val: string, i: number) => (
+                        <td
+                          key={i}
+                          className={`border border-slate-300 px-1 py-0.5 text-center transition-colors ${
+                            selectedSummaryCol === i ? 'bg-teal-100 ring-2 ring-teal-300 border-teal-400' : ''
+                          }`}
+                          onClick={(e) => {
+                            if ((e.target as HTMLElement).closest('input, [role="textbox"]')) return
+                            handleSelectSummaryCol(i)
+                          }}
+                        >
+                          <NumericInput
+                            value={val}
+                            onChange={(newVal) => updateSummaryValue(i, newVal)}
+                            className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs font-mono text-center focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                            placeholder="—"
+                            title={`${summaryTitles[i]} 数据`}
+                            maxDecimalPlaces={3}
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
 
-            {/* 扩展数据区 */}
-            <div className="flex-1 overflow-auto px-4 pb-2 min-h-[60px]">
-              <div className="w-full border border-slate-200 rounded-lg bg-white min-h-full" />
-            </div>
-
             {/* 底部按钮 */}
-            <div className="flex-shrink-0 px-4 pb-4 flex gap-3">
-              <button
-                className={primaryBtnClass}
-                onClick={handleAutoStart}
-                disabled={isAutoRunning}
-              >
-                <span className="material-symbols-outlined text-sm">play_arrow</span>
-                启动
-              </button>
+            <div className="mt-auto flex-shrink-0 px-4 pb-4 flex gap-1.5">
+              {motorState === 'idle' ? (
+                (() => {
+                  const noSelection = selectedRow === null && selectedSummaryCol === null
+                  let hasValidAngle = false
+                  if (selectedRow) {
+                    const row = measureData.find(r => r.id === selectedRow)
+                    hasValidAngle = !!row && !isNaN(parseFloat(row.labelValue))
+                  } else if (selectedSummaryCol !== null) {
+                    hasValidAngle = !isNaN(parseFloat(summaryTitles[selectedSummaryCol].replace('°', '')))
+                  }
+                  const isDisabled = noSelection || !hasValidAngle || freeMotorState !== 'idle'
+                  const disabledReason = freeMotorState !== 'idle'
+                    ? '自由测量运行中'
+                    : noSelection
+                      ? '请先选择标准点行或汇总列'
+                      : !hasValidAngle
+                        ? '选中项未填写有效角度值'
+                        : ''
+                  return (
+                    <div className="relative flex-1 min-w-[180px] group">
+                      <button
+                        className={`${primaryBtnClass} w-full whitespace-nowrap ${isDisabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        onClick={handleStartMove}
+                        disabled={isDisabled}
+                      >
+                        <span className="material-symbols-outlined text-sm">play_arrow</span>
+                        {selectedRow
+                          ? `启动 (${measureData.find(r => r.id === selectedRow)?.labelValue || '—'}°)`
+                          : selectedSummaryCol !== null
+                            ? `启动 (${summaryTitles[selectedSummaryCol]})`
+                            : '启动'}
+                      </button>
+                      {isDisabled && (
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-slate-800 text-white text-xs rounded-md whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
+                          {disabledReason}
+                          <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800" />
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()
+              ) : (
+                <>
+                  {motorState === 'running' ? (
+                    <button className={`${primaryBtnClass} !bg-amber-500 hover:!bg-amber-600`} onClick={handlePause}>
+                      <span className="material-symbols-outlined text-sm">pause</span>
+                      暂停
+                    </button>
+                  ) : (
+                    <button className={primaryBtnClass} onClick={handleResume}>
+                      <span className="material-symbols-outlined text-sm">play_arrow</span>
+                      继续
+                    </button>
+                  )}
+                  <button className={criticalBtnClass} onClick={handleStop}>
+                    <span className="material-symbols-outlined text-sm">stop</span>
+                    结束
+                  </button>
+                </>
+              )}
               <button
                 className={criticalBtnClass}
                 onClick={handleAutoClear}

@@ -12,6 +12,8 @@ pub struct AppConfig {
     pub update: UpdateConfig,
     #[serde(default = "default_app")]
     pub app: AppBehaviorConfig,
+    #[serde(default)]
+    pub scale: ScaleConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +40,19 @@ pub struct AppBehaviorConfig {
     pub close_to_tray: bool,
     #[serde(default = "default_theme")]
     pub theme: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScaleConfig {
+    #[serde(default)]
+    pub last_device_address: String,
+    #[serde(default)]
+    pub auto_reconnect: bool,
+    #[serde(default = "default_display_unit")]
+    pub display_unit: String,
+    #[serde(default = "default_sample_rate")]
+    pub sample_rate: u32,
 }
 
 // 默认值函数
@@ -74,6 +89,23 @@ fn default_github_repo() -> String {
 fn default_theme() -> String {
     "light".into()
 }
+fn default_display_unit() -> String {
+    "N".into()
+}
+fn default_sample_rate() -> u32 {
+    10
+}
+
+impl Default for ScaleConfig {
+    fn default() -> Self {
+        ScaleConfig {
+            last_device_address: String::new(),
+            auto_reconnect: false,
+            display_unit: default_display_unit(),
+            sample_rate: default_sample_rate(),
+        }
+    }
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -81,6 +113,7 @@ impl Default for AppConfig {
             device: default_device(),
             update: default_update(),
             app: default_app(),
+            scale: ScaleConfig::default(),
         }
     }
 }

@@ -2,6 +2,7 @@ import { ReactNode } from 'react'
 
 export interface IndustrialCardProps {
   title?: string
+  headerLeft?: ReactNode
   headerRight?: ReactNode
   headerBg?: string
   children: ReactNode
@@ -11,6 +12,7 @@ export interface IndustrialCardProps {
 
 export default function IndustrialCard({
   title,
+  headerLeft,
   headerRight,
   headerBg,
   children,
@@ -26,9 +28,12 @@ export default function IndustrialCard({
         <div
           className={`industrial-card-header flex justify-between items-center ${headerBg || ''}`}
         >
-          <h3 className="font-label-bold text-label-bold uppercase tracking-widest text-on-surface-variant">
-            {title}
-          </h3>
+          <div className="flex items-center gap-2">
+            {headerLeft && <div>{headerLeft}</div>}
+            <h3 className="font-label-bold text-label-bold uppercase tracking-widest text-on-surface-variant">
+              {title}
+            </h3>
+          </div>
           {headerRight && <div>{headerRight}</div>}
         </div>
       )}

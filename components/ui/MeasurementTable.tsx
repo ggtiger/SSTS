@@ -26,6 +26,7 @@ export interface MeasurementTableProps {
   onCellEdit?: (rowId: string, colIndex: number, value: string) => void
   onLabelEdit?: (rowId: string, value: string) => void
   highlightRow?: string | null
+  onRowClick?: (rowId: string) => void
 }
 
 export default function MeasurementTable({
@@ -37,6 +38,7 @@ export default function MeasurementTable({
   onCellEdit,
   onLabelEdit,
   highlightRow,
+  onRowClick,
 }: MeasurementTableProps) {
   // columnGroups 模式：计算总列数和每列的可编辑性
   const useGroups = !!columnGroups && columnGroups.length > 0
@@ -65,15 +67,19 @@ export default function MeasurementTable({
               {rowLabelHeader}
             </th>
             {useGroups ? (
-              columnGroups!.map((group, gi) => (
-                <th
-                  key={gi}
-                  colSpan={group.columns.length}
-                  className="border border-slate-300 bg-slate-100 px-3 py-1.5 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-pre-line"
-                >
-                  {group.label}
-                </th>
-              ))
+              columnGroups!.map((group, gi) => {
+                const isSingleEmpty = group.columns.length === 1 && group.columns[0] === ''
+                return (
+                  <th
+                    key={gi}
+                    colSpan={isSingleEmpty ? undefined : group.columns.length}
+                    rowSpan={isSingleEmpty ? 2 : undefined}
+                    className="border border-slate-300 bg-slate-100 px-3 py-1.5 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-pre-line"
+                  >
+                    {group.label}
+                  </th>
+                )
+              })
             ) : (
               <th
                 colSpan={columnHeaders.length}
@@ -85,8 +91,9 @@ export default function MeasurementTable({
           </tr>
           <tr>
             {useGroups ? (
-              columnGroups!.flatMap((group, gi) =>
-                group.columns.map((col, ci) => (
+              columnGroups!.flatMap((group, gi) => {
+                if (group.columns.length === 1 && group.columns[0] === '') return []
+                return group.columns.map((col, ci) => (
                   <th
                     key={`${gi}-${ci}`}
                     className="border border-slate-300 bg-slate-50 px-3 py-1.5 text-center text-xs font-semibold text-slate-600 min-w-[80px]"
@@ -94,7 +101,7 @@ export default function MeasurementTable({
                     {col}
                   </th>
                 ))
-              )
+              })
             ) : (
               columnHeaders.map((header, i) => (
                 <th
@@ -115,13 +122,25 @@ export default function MeasurementTable({
                 key={row.id}
                 className={`transition-colors ${
                   isHighlighted
-                    ? 'bg-blue-50 border-l-2 border-l-blue-400'
+                    ? 'bg-blue-100 border-l-4 border-l-blue-600 shadow-[inset_0_0_0_1px_rgba(37,99,235,0.2)]'
                     : 'hover:bg-slate-50'
-                }`}
+                } ${onRowClick ? 'cursor-pointer' : ''}`}
+                onClick={(e) => {
+                  // 点击输入框等交互元素时不触发行选中切换
+                  if ((e.target as HTMLElement).closest('input, [role="textbox"]')) return
+                  onRowClick?.(row.id)
+                }}
               >
                 <td className="border border-slate-300 px-1.5 py-0.5 font-semibold text-slate-700 text-xs">
                   {onLabelEdit ? (
                     <div className="flex items-center gap-1">
+                      {onRowClick && (
+                        <span className={`flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+                          isHighlighted ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-300 text-transparent hover:border-slate-400'
+                        }`}>
+                          <span className="material-symbols-outlined" style={{ fontSize: '12px' }}>check</span>
+                        </span>
+                      )}
                       <span className="flex-shrink-0 text-slate-500 w-6">{row.label}</span>
                       <NumericInput
                         value={row.labelValue ?? ''}
@@ -129,10 +148,20 @@ export default function MeasurementTable({
                         className="flex-1 min-w-0 px-1.5 py-1 bg-white border border-slate-300 rounded text-xs font-mono text-center focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                         placeholder="°"
                         title={`${row.label} 标准点`}
+                        maxDecimalPlaces={3}
                       />
                     </div>
                   ) : (
-                    row.label
+                    <div className="flex items-center gap-1">
+                      {onRowClick && (
+                        <span className={`flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+                          isHighlighted ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-300 text-transparent hover:border-slate-400'
+                        }`}>
+                          <span className="material-symbols-outlined" style={{ fontSize: '12px' }}>check</span>
+                        </span>
+                      )}
+                      <span>{row.label}</span>
+                    </div>
                   )}
                 </td>
                 {Array.from({ length: totalColumns }, (_, colIdx) => {
@@ -155,6 +184,7 @@ export default function MeasurementTable({
                           className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs font-mono text-center focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                           placeholder="—"
                           title={`${row.label} 仪器示值`}
+                          maxDecimalPlaces={3}
                         />
                       ) : (
                         <span className="text-xs font-mono text-slate-700">
