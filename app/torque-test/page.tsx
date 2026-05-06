@@ -7,6 +7,7 @@ import IndustrialCard from '@/components/ui/IndustrialCard'
 import StatusIndicator from '@/components/ui/StatusIndicator'
 import NumericInput from '@/components/ui/NumericInput'
 import { isTauri } from '@/lib/tauri'
+import { loadConfig, saveConfig } from '@/lib/config'
 import { useTorqueStore, initialTorqueData } from '@/lib/store/torque-store'
 import type { TorqueRow, TorqueRecord } from '@/lib/store/torque-store'
 import { initTorqueDB, saveTorqueRecord, getAllTorqueRecords, updateTorqueRecord, deleteTorqueRecord } from '@/lib/db/torque-records'
@@ -79,6 +80,20 @@ export default function TorqueTestPage() {
     loadRecords()
   }, [])
 
+  // === 从配置加载标准值和校正系数 ===
+  useEffect(() => {
+    const initConfig = async () => {
+      const config = await loadConfig()
+      if (config.scale.standardValue) {
+        setStandardValue(config.scale.standardValue)
+      }
+      if (config.scale.correctionCoefficient) {
+        setCorrectionCoefficient(config.scale.correctionCoefficient)
+      }
+    }
+    initConfig()
+  }, [])
+
   useEffect(() => {
     if (scaleError) {
       setToastMsg(scaleError)
@@ -147,8 +162,9 @@ export default function TorqueTestPage() {
   }, [elapsedSeconds])
 
   // === 实时力值 ===
+  const correctionCoeff = parseFloat(correctionCoefficient) || 1
   const liveValue = scaleState.data
-    ? scaleState.data.weightN.toFixed(3)
+    ? (scaleState.data.weightN * correctionCoeff).toFixed(3)
     : '---'
 
   // === BLE 操作 ===
@@ -382,7 +398,9 @@ export default function TorqueTestPage() {
         for (let i = 0; i < 3; i++) {
           if (abortAutoRef.current) break
           await new Promise(r => setTimeout(r, 2000))
-          const value = scaleDataRef.current?.weightN ?? 0
+          const rawValue = scaleDataRef.current?.weightN ?? 0
+          const coeff = parseFloat(correctionCoefficient) || 1
+          const value = rawValue * coeff
           handleValueEdit(row.id, i, value.toFixed(2))
         }
       }
@@ -396,12 +414,19 @@ export default function TorqueTestPage() {
   }
 
   // === 力值校正 ===
-  const handleCalibration = () => {
+  const handleCalibration = async () => {
     const currentForce = scaleState.data?.weightN
     const standard = parseFloat(standardValue)
     if (currentForce && standard && standard !== 0) {
       const coefficient = standard / currentForce
-      setCorrectionCoefficient(coefficient.toFixed(5))
+      const coeffStr = coefficient.toFixed(5)
+      setCorrectionCoefficient(coeffStr)
+
+      // 保存到配置
+      const config = await loadConfig()
+      config.scale.standardValue = standardValue
+      config.scale.correctionCoefficient = coeffStr
+      await saveConfig(config)
     }
   }
 
@@ -571,12 +596,19 @@ export default function TorqueTestPage() {
               <p className="text-xs font-semibold text-slate-500 uppercase">力值校正</p>
               <div className="flex items-center gap-2">
                 <label className="text-xs text-slate-500 flex-shrink-0 w-14">标准值</label>
-                <input
-                  type="number"
-                  className="flex-1 px-2 py-1 text-sm text-right border border-slate-200 rounded bg-white font-mono focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                <NumericInput
+                  className="flex-1 px-2 py-1 text-sm text-right border border-slate-200 rounded bg-white font-mono focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 cursor-pointer"
                   value={standardValue}
-                  onChange={e => setStandardValue(e.target.value)}
+                  onChange={async (val) => {
+                    setStandardValue(val)
+                    const config = await loadConfig()
+                    config.scale.standardValue = val
+                    await saveConfig(config)
+                  }}
                   placeholder="输入标准值(N)"
+                  title="标准值"
+                  maxDecimalPlaces={2}
+                  allowNegative={false}
                 />
               </div>
               <div className="flex items-center gap-2">

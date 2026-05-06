@@ -1,4 +1,4 @@
-use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter, WriteType, Characteristic};
+use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral as _, ScanFilter, WriteType, Characteristic};
 use btleplug::platform::{Adapter, Manager, Peripheral};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -44,6 +44,7 @@ struct ScaleManagerInner {
     device_address: String,
     write_characteristic: Option<Characteristic>,
     notify_characteristic: Option<Characteristic>,
+    app_handle: Option<AppHandle>,
 }
 
 impl ScaleManagerInner {
@@ -57,6 +58,7 @@ impl ScaleManagerInner {
             device_address: String::new(),
             write_characteristic: None,
             notify_characteristic: None,
+            app_handle: None,
         }
     }
 
@@ -219,6 +221,7 @@ impl ScaleManager {
         log::info!("[Scale] 发现 {} 个服务", services.len());
 
         let mut write_char: Option<Characteristic> = None;
+        let mut write_char_no_resp: Option<Characteristic> = None;
         let mut notify_char: Option<Characteristic> = None;
 
         for service in &services {
@@ -232,24 +235,32 @@ impl ScaleManager {
                 // 查找 Notify 特征
                 if characteristic
                     .properties
-                    .contains(btleplug::api::CharPropFlags::NOTIFY)
+                    .contains(CharPropFlags::NOTIFY)
                     && notify_char.is_none()
                 {
                     notify_char = Some(characteristic.clone());
                 }
-                // 查找 Write 特征
-                if (characteristic
+                // 优先查找支持 WRITE (WithResponse) 的特征
+                if characteristic
                     .properties
-                    .contains(btleplug::api::CharPropFlags::WRITE)
-                    || characteristic
-                        .properties
-                        .contains(btleplug::api::CharPropFlags::WRITE_WITHOUT_RESPONSE))
+                    .contains(CharPropFlags::WRITE)
                     && write_char.is_none()
                 {
                     write_char = Some(characteristic.clone());
                 }
+                // 备选：仅支持 WRITE_WITHOUT_RESPONSE 的特征
+                if characteristic
+                    .properties
+                    .contains(CharPropFlags::WRITE_WITHOUT_RESPONSE)
+                    && write_char_no_resp.is_none()
+                {
+                    write_char_no_resp = Some(characteristic.clone());
+                }
             }
         }
+
+        // 优先使用支持 WRITE 的特征，其次用 WRITE_WITHOUT_RESPONSE
+        let final_write_char = write_char.or(write_char_no_resp);
 
         let notify_c = notify_char
             .ok_or_else(|| "未找到 Notify 特征，无法接收数据".to_string())?;
@@ -272,11 +283,12 @@ impl ScaleManager {
         {
             let mut inner = self.inner.lock().await;
             inner.peripheral = Some(peripheral.clone());
-            inner.write_characteristic = write_char;
+            inner.write_characteristic = final_write_char;
             inner.notify_characteristic = Some(notify_c);
             inner.is_connected = true;
             inner.device_name = device_name.clone();
             inner.device_address = address.to_string();
+            inner.app_handle = Some(app.clone());
 
             let state = inner.connection_state();
             let _ = app.emit("scale-connection-changed", &state);
@@ -395,6 +407,13 @@ impl ScaleManager {
             inner.is_connected = false;
             inner.device_name.clear();
             inner.device_address.clear();
+
+            // 发送连接状态变更事件通知前端
+            if let Some(ref app) = inner.app_handle {
+                let state = inner.connection_state();
+                let _ = app.emit("scale-connection-changed", &state);
+            }
+            inner.app_handle = None;
         }
 
         Ok(())
@@ -431,8 +450,17 @@ impl ScaleManager {
             (p, c)
         }; // 锁释放
 
+        // 根据特征属性选择写入类型
+        let write_type = if write_c.properties.contains(CharPropFlags::WRITE) {
+            WriteType::WithResponse
+        } else {
+            WriteType::WithoutResponse
+        };
+
+        log::info!("[Scale] 写入数据 ({} bytes), 类型: {:?}", data.len(), write_type);
+
         peripheral
-            .write(&write_c, data, WriteType::WithoutResponse)
+            .write(&write_c, data, write_type)
             .await
             .map_err(|e| format!("写入数据失败: {}", e))
     }

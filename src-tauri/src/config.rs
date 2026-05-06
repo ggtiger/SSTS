@@ -53,6 +53,10 @@ pub struct ScaleConfig {
     pub display_unit: String,
     #[serde(default = "default_sample_rate")]
     pub sample_rate: u32,
+    #[serde(default)]
+    pub standard_value: String,
+    #[serde(default)]
+    pub correction_coefficient: String,
 }
 
 // 默认值函数
@@ -103,6 +107,8 @@ impl Default for ScaleConfig {
             auto_reconnect: false,
             display_unit: default_display_unit(),
             sample_rate: default_sample_rate(),
+            standard_value: String::new(),
+            correction_coefficient: String::new(),
         }
     }
 }

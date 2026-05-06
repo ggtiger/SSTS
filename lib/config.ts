@@ -20,6 +20,8 @@ export interface AppConfig {
     displayUnit: 'N' | 'g' | 'kg'
     sampleRate: number
     gravityAcceleration: number
+    standardValue: string
+    correctionCoefficient: string
   }
 }
 
@@ -42,6 +44,8 @@ export const DEFAULT_CONFIG: AppConfig = {
     displayUnit: 'N',
     sampleRate: 10,
     gravityAcceleration: 9.80000,
+    standardValue: '',
+    correctionCoefficient: '',
   },
 }
 

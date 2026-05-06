@@ -1,6 +1,6 @@
 [package]
 name = "vacdevice"
-version = "0.2.7"
+version = "0.2.8"
 edition = "2021"
 description = "VACDevice - 机动车角度综合校准装置"
 
