@@ -217,6 +217,13 @@ impl ScaleManager {
             .await
             .map_err(|e| format!("发现服务失败: {}", e))?;
 
+        // Windows GATT 缓存同步需要额外等待时间
+        #[cfg(target_os = "windows")]
+        {
+            log::info!("[Scale] Windows: 等待 GATT 缓存同步...");
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
+
         let services = peripheral.services();
         log::info!("[Scale] 发现 {} 个服务", services.len());
 
@@ -439,7 +446,7 @@ impl ScaleManager {
         inner.connection_state()
     }
 
-    /// 发送原始字节到设备
+    /// 发送原始字节到设备（双重写入策略，兼容 Windows BLE 权限模型）
     async fn write_to_device(&self, data: &[u8]) -> Result<(), String> {
         let (peripheral, write_c) = {
             let inner = self.inner.lock().await;
@@ -450,19 +457,52 @@ impl ScaleManager {
             (p, c)
         }; // 锁释放
 
-        // 根据特征属性选择写入类型
-        let write_type = if write_c.properties.contains(CharPropFlags::WRITE) {
-            WriteType::WithResponse
-        } else {
-            WriteType::WithoutResponse
+        log::info!("[Scale] 写入数据 ({} bytes), 特征UUID: {}, 属性: {:?}",
+            data.len(), write_c.uuid, write_c.properties);
+
+        // 构建写入方式列表：Windows 优先 WithResponse，其他平台优先 WithoutResponse
+        let write_types = {
+            let has_write = write_c.properties.contains(CharPropFlags::WRITE);
+            let has_write_no_resp = write_c.properties.contains(CharPropFlags::WRITE_WITHOUT_RESPONSE);
+
+            #[cfg(target_os = "windows")]
+            {
+                // Windows 平台：优先 WithResponse（更可靠，避免权限问题）
+                match (has_write, has_write_no_resp) {
+                    (true, true) => vec![WriteType::WithResponse, WriteType::WithoutResponse],
+                    (true, false) => vec![WriteType::WithResponse],
+                    (false, true) => vec![WriteType::WithoutResponse],
+                    (false, false) => vec![WriteType::WithResponse], // 默认尝试
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                // 非 Windows 平台：优先 WithoutResponse
+                match (has_write, has_write_no_resp) {
+                    (true, true) => vec![WriteType::WithoutResponse, WriteType::WithResponse],
+                    (true, false) => vec![WriteType::WithResponse],
+                    (false, true) => vec![WriteType::WithoutResponse],
+                    (false, false) => vec![WriteType::WithResponse],
+                }
+            }
         };
 
-        log::info!("[Scale] 写入数据 ({} bytes), 类型: {:?}", data.len(), write_type);
+        let mut last_error = String::new();
+        for write_type in &write_types {
+            log::info!("[Scale] 尝试写入方式: {:?}", write_type);
+            match peripheral.write(&write_c, data, *write_type).await {
+                Ok(_) => {
+                    log::info!("[Scale] 写入成功 ({:?})", write_type);
+                    return Ok(());
+                }
+                Err(e) => {
+                    last_error = format!("{}", e);
+                    log::warn!("[Scale] 写入失败 ({:?}): {}", write_type, e);
+                }
+            }
+        }
 
-        peripheral
-            .write(&write_c, data, write_type)
-            .await
-            .map_err(|e| format!("写入数据失败: {}", e))
+        Err(format!("写入数据失败: {}", last_error))
     }
 }
 
