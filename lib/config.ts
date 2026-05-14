@@ -22,6 +22,7 @@ export interface AppConfig {
     gravityAcceleration: number
     standardValue: string
     correctionCoefficient: string
+    armLength: string
   }
 }
 
@@ -46,6 +47,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     gravityAcceleration: 9.80000,
     standardValue: '',
     correctionCoefficient: '',
+    armLength: '',
   },
 }
 

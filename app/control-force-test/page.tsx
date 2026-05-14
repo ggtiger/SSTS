@@ -8,16 +8,16 @@ import StatusIndicator from '@/components/ui/StatusIndicator'
 import NumericInput from '@/components/ui/NumericInput'
 import { isTauri } from '@/lib/tauri'
 import { loadConfig, saveConfig } from '@/lib/config'
-import { useTorqueStore, initialTorqueData } from '@/lib/store/torque-store'
-import type { TorqueRow, TorqueRecord } from '@/lib/store/torque-store'
-import { initTorqueDB, saveTorqueRecord, getAllTorqueRecords, updateTorqueRecord, deleteTorqueRecord } from '@/lib/db/torque-records'
+import { useControlForceStore, initialControlForceData, defaultExtraData } from '@/lib/store/control-force-store'
+import type { ControlForceRow, ControlForceExtra, ControlForceRecord } from '@/lib/store/control-force-store'
+import { initControlForceDB, saveControlForceRecord, getAllControlForceRecords, updateControlForceRecord, deleteControlForceRecord } from '@/lib/db/control-force-records'
 
 const inputClass = "w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs font-mono text-center focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
 const disabledInputClass = "w-full px-2 py-1 bg-slate-100 border border-slate-300 rounded text-xs font-mono text-slate-400 cursor-not-allowed"
 const primaryBtnClass = "flex-1 px-3 py-1.5 bg-primary hover:bg-primary/90 text-on-primary text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-1"
 const criticalBtnClass = "flex-1 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-1"
 
-const calculateRow = (row: TorqueRow): TorqueRow => {
+const calculateRow = (row: ControlForceRow): ControlForceRow => {
   const vals = row.values.map(v => parseFloat(v)).filter(v => !isNaN(v))
   if (vals.length === 3) {
     const avg = (vals[0] + vals[1] + vals[2]) / 3
@@ -29,7 +29,7 @@ const calculateRow = (row: TorqueRow): TorqueRow => {
   return { ...row, average: null, error: null, repeatability: null }
 }
 
-export default function TorqueTestPage() {
+export default function ControlForceTestPage() {
   // === BLE 称重模块 ===
   const { state: scaleState, actions: scaleActions, error: scaleError } = useScale()
   const [devices, setDevices] = useState<ScaleDeviceInfo[]>([])
@@ -40,11 +40,12 @@ export default function TorqueTestPage() {
   // === 从 Zustand Store 获取持久化状态 ===
   const {
     measureData, setMeasureData, resetMeasureData,
+    extraData, setExtraData, resetExtraData,
     driftValues, setDriftValues, resetDriftValues,
     unit, setUnit,
     recordHistory, setRecordHistory,
     viewingRecordId, setViewingRecordId,
-  } = useTorqueStore()
+  } = useControlForceStore()
 
   // === 自动测量 ===
   const [isAutoMeasuring, setIsAutoMeasuring] = useState(false)
@@ -58,7 +59,6 @@ export default function TorqueTestPage() {
   // === 力值校正 ===
   const [standardValue, setStandardValue] = useState<string>('')
   const [correctionCoefficient, setCorrectionCoefficient] = useState<string>('')
-  const [armLength, setArmLength] = useState<string>('')
 
   // === Toast ===
   const [toastMsg, setToastMsg] = useState<string | null>(null)
@@ -71,8 +71,8 @@ export default function TorqueTestPage() {
   useEffect(() => {
     const loadRecords = async () => {
       try {
-        await initTorqueDB()
-        const records = await getAllTorqueRecords()
+        await initControlForceDB()
+        const records = await getAllControlForceRecords()
         setRecordHistory(records)
       } catch (err) {
         console.error('加载记录失败:', err)
@@ -90,9 +90,6 @@ export default function TorqueTestPage() {
       }
       if (config.scale.correctionCoefficient) {
         setCorrectionCoefficient(config.scale.correctionCoefficient)
-      }
-      if (config.scale.armLength) {
-        setArmLength(config.scale.armLength)
       }
     }
     initConfig()
@@ -167,11 +164,8 @@ export default function TorqueTestPage() {
 
   // === 实时力值 ===
   const correctionCoeff = parseFloat(correctionCoefficient) || 1
-  const armLengthVal = parseFloat(armLength) || 1
   const liveValue = scaleState.data
-    ? unit === 'Nm'
-      ? (scaleState.data.weightN * correctionCoeff * armLengthVal).toFixed(3)
-      : (scaleState.data.weightN * correctionCoeff).toFixed(3)
+    ? (scaleState.data.weightN * correctionCoeff).toFixed(3)
     : '---'
 
   // === BLE 操作 ===
@@ -227,6 +221,7 @@ export default function TorqueTestPage() {
 
   const handleClear = () => {
     resetMeasureData()
+    resetExtraData()
     resetDriftValues()
     setViewingRecordId(null)
     setIsTimerRunning(false)
@@ -241,13 +236,14 @@ export default function TorqueTestPage() {
   const handleAutoRecord = async () => {
     try {
       const timestamp = new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-      await saveTorqueRecord({
+      await saveControlForceRecord({
         timestamp,
         measureData: measureData.map(r => ({ ...r, values: [...r.values] as [string, string, string] })),
+        extraData: { ...extraData },
         driftValues: { ...driftValues },
         unit: unit,
       })
-      const records = await getAllTorqueRecords()
+      const records = await getAllControlForceRecords()
       setRecordHistory(records)
       setToastMsg('数据已记录')
       if (toastTimer.current) clearTimeout(toastTimer.current)
@@ -260,8 +256,9 @@ export default function TorqueTestPage() {
     }
   }
 
-  const handleViewRecord = (record: TorqueRecord) => {
+  const handleViewRecord = (record: ControlForceRecord) => {
     setMeasureData(record.measureData.map(r => ({ ...r, values: [...r.values] as [string, string, string] })))
+    setExtraData({ ...record.extraData })
     setDriftValues({ ...record.driftValues })
     setUnit(record.unit)
     setViewingRecordId(record.id)
@@ -271,12 +268,13 @@ export default function TorqueTestPage() {
   const handleSaveRecord = async () => {
     if (!viewingRecordId) return
     try {
-      await updateTorqueRecord(viewingRecordId, {
+      await updateControlForceRecord(viewingRecordId, {
         measureData: measureData.map(r => ({ ...r, values: [...r.values] as [string, string, string] })),
+        extraData: { ...extraData },
         driftValues: { ...driftValues },
         unit: unit,
       })
-      const records = await getAllTorqueRecords()
+      const records = await getAllControlForceRecords()
       setRecordHistory(records)
       setToastMsg('修改已保存')
       if (toastTimer.current) clearTimeout(toastTimer.current)
@@ -292,17 +290,19 @@ export default function TorqueTestPage() {
   const handleBackToEdit = () => {
     setViewingRecordId(null)
     resetMeasureData()
+    resetExtraData()
     resetDriftValues()
   }
 
   const handleDeleteRecord = async (recordId: number) => {
     try {
-      await deleteTorqueRecord(recordId)
-      const records = await getAllTorqueRecords()
+      await deleteControlForceRecord(recordId)
+      const records = await getAllControlForceRecords()
       setRecordHistory(records)
       if (viewingRecordId === recordId) {
         setViewingRecordId(null)
         resetMeasureData()
+        resetExtraData()
         resetDriftValues()
       }
     } catch (err) {
@@ -311,18 +311,19 @@ export default function TorqueTestPage() {
   }
 
   // === CSV 生成 ===
-  const generateCSV = (rows: TorqueRow[], drift: typeof driftValues) => {
+  const generateCSV = (rows: ControlForceRow[], drift: typeof driftValues, extra: ControlForceExtra) => {
     const dResult = (() => {
       const v10 = parseFloat(drift.min10)
       const v0 = parseFloat(drift.min0)
       if (!isNaN(v10) && !isNaN(v0)) return (v10 - v0).toFixed(2)
       return ''
     })()
-    let csv = '方向,标准点,示值1,示值2,示值3,平均值,示值误差%,重复性%\n'
+    let csv = '标准点,示值1,示值2,示值3,平均值,示值误差%,重复性%\n'
     for (const row of rows) {
-      const dir = row.direction === 'cw' ? '顺时针' : '逆时针'
-      csv += `${dir},${row.standardPoint},${row.values.join(',')},${row.average !== null ? row.average.toFixed(2) : ''},${row.error !== null ? row.error.toFixed(2) : ''},${row.repeatability !== null ? row.repeatability.toFixed(2) : ''}\n`
+      csv += `${row.standardPoint},${row.values.join(',')},${row.average !== null ? row.average.toFixed(2) : ''},${row.error !== null ? row.error.toFixed(2) : ''},${row.repeatability !== null ? row.repeatability.toFixed(2) : ''}\n`
     }
+    csv += `鉴别力阈,${extra.discriminationValue},,,分度值,,${extra.discriminationRepeat}\n`
+    csv += `测量范围,,,,${extra.measureRange},,\n`
     csv += '\n漂移测试\n'
     csv += '0min,5min,10min,漂移\n'
     csv += `${drift.min0},${drift.min5},${drift.min10},${dResult}\n`
@@ -330,14 +331,14 @@ export default function TorqueTestPage() {
   }
 
   const handleExport = async () => {
-    const csvContent = generateCSV(measureData, driftValues)
+    const csvContent = generateCSV(measureData, driftValues, extraData)
 
     if (isTauri()) {
       try {
         const { save } = await import('@tauri-apps/plugin-dialog')
         const { invoke } = await import('@tauri-apps/api/core')
         const filePath = await save({
-          defaultPath: `力矩测试_${new Date().toLocaleDateString('zh-CN')}.csv`,
+          defaultPath: `操纵力测试_${new Date().toLocaleDateString('zh-CN')}.csv`,
           filters: [{ name: 'CSV', extensions: ['csv'] }],
         })
         if (!filePath) return
@@ -357,7 +358,7 @@ export default function TorqueTestPage() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `力矩测试_${new Date().toLocaleDateString('zh-CN')}.csv`
+      a.download = `操纵力测试_${new Date().toLocaleDateString('zh-CN')}.csv`
       a.click()
       URL.revokeObjectURL(url)
       setToastMsg('数据已导出')
@@ -366,15 +367,15 @@ export default function TorqueTestPage() {
     }
   }
 
-  const handleExportRecord = async (record: TorqueRecord) => {
-    const csvContent = generateCSV(record.measureData, record.driftValues)
+  const handleExportRecord = async (record: ControlForceRecord) => {
+    const csvContent = generateCSV(record.measureData, record.driftValues, record.extraData)
 
     if (isTauri()) {
       try {
         const { save } = await import('@tauri-apps/plugin-dialog')
         const { invoke } = await import('@tauri-apps/api/core')
         const filePath = await save({
-          defaultPath: `力矩测试_${record.timestamp.replace(/[\/\s:]/g, '-')}.csv`,
+          defaultPath: `操纵力测试_${record.timestamp.replace(/[\/\s:]/g, '-')}.csv`,
           filters: [{ name: 'CSV', extensions: ['csv'] }],
         })
         if (!filePath) return
@@ -388,7 +389,7 @@ export default function TorqueTestPage() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `力矩测试_${record.timestamp.replace(/[\/\s:]/g, '-')}.csv`
+      a.download = `操纵力测试_${record.timestamp.replace(/[\/\s:]/g, '-')}.csv`
       a.click()
       URL.revokeObjectURL(url)
     }
@@ -407,8 +408,7 @@ export default function TorqueTestPage() {
           await new Promise(r => setTimeout(r, 2000))
           const rawValue = scaleDataRef.current?.weightN ?? 0
           const coeff = parseFloat(correctionCoefficient) || 1
-          const arm = unit === 'Nm' ? (parseFloat(armLength) || 1) : 1
-          const value = rawValue * coeff * arm
+          const value = rawValue * coeff
           handleValueEdit(row.id, i, value.toFixed(2))
         }
       }
@@ -443,9 +443,7 @@ export default function TorqueTestPage() {
     return val.toFixed(2)
   }
 
-  const cwRows = measureData.filter(r => r.direction === 'cw')
-  const ccwRows = measureData.filter(r => r.direction === 'ccw')
-  const unitLabel = unit === 'N' ? '转向力/N' : '力矩/Nm'
+  const unitLabel = unit === 'pedal' ? '踏板力/N' : '手刹力/N'
 
   // 信号强度图标
   const rssiIcon = (rssi: number | null) => {
@@ -583,7 +581,7 @@ export default function TorqueTestPage() {
               }`}>
                 {liveValue}
               </p>
-              <p className="text-xs text-slate-500 mt-0.5 font-semibold">{unit}</p>
+              <p className="text-xs text-slate-500 mt-0.5 font-semibold">{unitLabel}</p>
             </div>
 
             {/* 清零按钮 */}
@@ -637,7 +635,7 @@ export default function TorqueTestPage() {
 
       {/* ===== 右列 - 测试表格 + 漂移测试 ===== */}
       <div className="flex-1 min-w-0 flex flex-col gap-3">
-        {/* 转向力/力矩 表格 */}
+        {/* 操纵力 表格 */}
         <IndustrialCard
           className="flex-1 flex flex-col min-h-0"
           borderLeftColor="#dc2626"
@@ -703,47 +701,25 @@ export default function TorqueTestPage() {
               <div className="flex rounded-md border border-slate-300 overflow-hidden">
                 <button
                   className={`px-2.5 py-1 text-xs font-semibold transition-colors ${
-                    unit === 'N'
+                    unit === 'pedal'
                       ? 'bg-primary text-on-primary'
                       : 'bg-white text-slate-600 hover:bg-slate-50'
                   }`}
-                  onClick={() => setUnit('N')}
+                  onClick={() => setUnit('pedal')}
                 >
-                  转向力/N
+                  踏板力/N
                 </button>
                 <button
                   className={`px-2.5 py-1 text-xs font-semibold transition-colors border-l border-slate-300 ${
-                    unit === 'Nm'
+                    unit === 'handbrake'
                       ? 'bg-primary text-on-primary'
                       : 'bg-white text-slate-600 hover:bg-slate-50'
                   }`}
-                  onClick={() => setUnit('Nm')}
+                  onClick={() => setUnit('handbrake')}
                 >
-                  力矩/Nm
+                  手刹力/N
                 </button>
               </div>
-
-              {/* 力臂长度（力矩模式时显示） */}
-              {unit === 'Nm' && (
-                <div className="flex items-center gap-1">
-                  <label className="text-xs text-slate-500 whitespace-nowrap">力臂</label>
-                  <NumericInput
-                    className="w-16 px-1.5 py-0.5 text-xs font-mono text-center border border-slate-300 rounded focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                    value={armLength}
-                    onChange={async (val) => {
-                      setArmLength(val)
-                      const config = await loadConfig()
-                      config.scale.armLength = val
-                      await saveConfig(config)
-                    }}
-                    placeholder="m"
-                    title="力臂长度(m)"
-                    maxDecimalPlaces={3}
-                    allowNegative={false}
-                  />
-                  <span className="text-xs text-slate-400">m</span>
-                </div>
-              )}
             </div>
           }
           headerRight={
@@ -771,7 +747,6 @@ export default function TorqueTestPage() {
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr>
-                  <th rowSpan={2} className="border border-slate-300 bg-slate-100 px-3 py-2 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider w-[72px]">方向</th>
                   <th rowSpan={2} className="border border-slate-300 bg-slate-100 px-3 py-2 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider w-[100px]">标准点</th>
                   <th colSpan={3} className="border border-slate-300 bg-slate-100 px-3 py-1.5 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">{unitLabel}</th>
                   <th rowSpan={2} className="border border-slate-300 bg-slate-100 px-3 py-2 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider w-[80px]">平均值</th>
@@ -785,15 +760,10 @@ export default function TorqueTestPage() {
                 </tr>
               </thead>
               <tbody>
-                {cwRows.map((row, i) => (
+                {measureData.map((row) => (
                   <tr key={row.id} className="transition-colors hover:bg-slate-50">
-                    {i === 0 && (
-                      <td rowSpan={5} className="border border-slate-300 text-center font-semibold text-slate-600 align-middle w-[72px]">
-                        <span className="inline-block text-xs" style={{ writingMode: 'vertical-rl' }}>顺时针</span>
-                      </td>
-                    )}
                     <td className="border border-slate-300 px-1 py-0.5">
-                      <NumericInput className={inputClass} value={row.standardPoint} onChange={val => handleStandardPointEdit(row.id, val)} placeholder="—" title="标准点" />
+                      <NumericInput className={inputClass} value={row.standardPoint} onChange={val => handleStandardPointEdit(row.id, val)} placeholder={row.id === 'A6' ? 'A6（倾斜）' : row.id} title="标准点" />
                     </td>
                     {([0, 1, 2] as const).map(ci => (
                       <td key={ci} className="border border-slate-300 px-1 py-0.5">
@@ -805,26 +775,32 @@ export default function TorqueTestPage() {
                     <td className="border border-slate-300 px-2 py-1 text-center text-xs font-mono text-slate-700">{formatNum(row.repeatability)}</td>
                   </tr>
                 ))}
-                {ccwRows.map((row, i) => (
-                  <tr key={row.id} className="transition-colors hover:bg-slate-50">
-                    {i === 0 && (
-                      <td rowSpan={5} className="border border-slate-300 text-center font-semibold text-slate-600 align-middle w-[72px]">
-                        <span className="inline-block text-xs" style={{ writingMode: 'vertical-rl' }}>逆时针</span>
-                      </td>
-                    )}
-                    <td className="border border-slate-300 px-1 py-0.5">
-                      <NumericInput className={inputClass} value={row.standardPoint} onChange={val => handleStandardPointEdit(row.id, val)} placeholder="—" title="标准点" />
-                    </td>
-                    {([0, 1, 2] as const).map(ci => (
-                      <td key={ci} className="border border-slate-300 px-1 py-0.5">
-                        <NumericInput className={inputClass} value={row.values[ci]} onChange={val => handleValueEdit(row.id, ci, val)} placeholder="—" title={`仪器示值 ${ci + 1}`} />
-                      </td>
-                    ))}
-                    <td className="border border-slate-300 px-2 py-1 text-center text-xs font-mono text-slate-700">{formatNum(row.average)}</td>
-                    <td className="border border-slate-300 px-2 py-1 text-center text-xs font-mono text-slate-700">{formatNum(row.error)}</td>
-                    <td className="border border-slate-300 px-2 py-1 text-center text-xs font-mono text-slate-700">{formatNum(row.repeatability)}</td>
-                  </tr>
-                ))}
+                {/* 鉴别力阈 */}
+                <tr className="transition-colors hover:bg-slate-50">
+                  <td colSpan={2} className="border border-slate-300 px-2 py-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-slate-600 whitespace-nowrap">鉴别力阈</span>
+                      <NumericInput className={inputClass} value={extraData.discriminationValue} onChange={val => setExtraData({...extraData, discriminationValue: val})} placeholder="手填" title="鉴别力阈" />
+                    </div>
+                  </td>
+                  <td colSpan={2} className="border border-slate-300 px-2 py-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-slate-600 whitespace-nowrap">分度值</span>
+                      <NumericInput className={inputClass} value={extraData.discriminationRepeat} onChange={val => setExtraData({...extraData, discriminationRepeat: val})} placeholder="手填" title="重复性" />
+                    </div>
+                  </td>
+                  <td colSpan={3} className="border border-slate-300 px-2 py-1"></td>
+                </tr>
+                {/* 测量范围 */}
+                <tr className="transition-colors hover:bg-slate-50">
+                  <td colSpan={4} className="border border-slate-300 px-2 py-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-slate-600 whitespace-nowrap">测量范围</span>
+                      <NumericInput className={inputClass} value={extraData.measureRange} onChange={val => setExtraData({...extraData, measureRange: val})} placeholder="手填" title="测量范围" />
+                    </div>
+                  </td>
+                  <td colSpan={3} className="border border-slate-300 px-2 py-1"></td>
+                </tr>
               </tbody>
             </table>
           </div>

@@ -15,6 +15,7 @@ const navItems = [
   { label: '制动', icon: 'car_repair', href: '/brake-test' },
   { label: '转向', icon: 'settings_input_component', href: '/steering-test' },
   { label: '力矩', icon: 'vibration', href: '/torque-test' },
+  { label: '操纵力', icon: 'pan_tool', href: '/control-force-test' },
   { label: '调试', icon: 'bug_report', href: '/debug' },
 ]
 
