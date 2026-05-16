@@ -10,6 +10,12 @@ use tokio::sync::Mutex;
 
 use super::scale_protocol::{self, ScaleData};
 
+/// nRF52 UART Service UUIDs (Nordic 标准透传协议)
+#[allow(dead_code)]
+const NUS_SERVICE_UUID: &str = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const NUS_RX_CHAR_UUID: &str = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // 写入方向（手机→设备）
+const NUS_TX_CHAR_UUID: &str = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // 通知方向（设备→手机）
+
 // ============ 数据结构 ============
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -231,43 +237,69 @@ impl ScaleManager {
         let mut write_char_no_resp: Option<Characteristic> = None;
         let mut notify_char: Option<Characteristic> = None;
 
+        // 第一轮：精确匹配 nRF52 UART Service 特征
         for service in &services {
-            log::info!("[Scale]   Service UUID: {}", service.uuid);
+            let service_uuid = service.uuid.to_string().to_lowercase();
+            log::info!("[Scale]   Service UUID: {}", service_uuid);
+
             for characteristic in &service.characteristics {
+                let char_uuid = characteristic.uuid.to_string().to_lowercase();
                 log::info!(
                     "[Scale]     Char UUID: {}, properties: {:?}",
-                    characteristic.uuid,
+                    char_uuid,
                     characteristic.properties
                 );
-                // 查找 Notify 特征
-                if characteristic
-                    .properties
-                    .contains(CharPropFlags::NOTIFY)
-                    && notify_char.is_none()
-                {
-                    notify_char = Some(characteristic.clone());
-                }
-                // 优先查找支持 WRITE (WithResponse) 的特征
-                if characteristic
-                    .properties
-                    .contains(CharPropFlags::WRITE)
-                    && write_char.is_none()
-                {
+
+                // 精确匹配 UART RX 特征（写入方向）
+                if char_uuid == NUS_RX_CHAR_UUID {
                     write_char = Some(characteristic.clone());
+                    log::info!("[Scale] ✓ 精确匹配 UART RX (写入) 特征");
                 }
-                // 备选：仅支持 WRITE_WITHOUT_RESPONSE 的特征
-                if characteristic
-                    .properties
-                    .contains(CharPropFlags::WRITE_WITHOUT_RESPONSE)
-                    && write_char_no_resp.is_none()
-                {
-                    write_char_no_resp = Some(characteristic.clone());
+
+                // 精确匹配 UART TX 特征（通知方向）
+                if char_uuid == NUS_TX_CHAR_UUID {
+                    notify_char = Some(characteristic.clone());
+                    log::info!("[Scale] ✓ 精确匹配 UART TX (通知) 特征");
+                }
+            }
+        }
+
+        // 第二轮：如果精确匹配未找到，回退到按属性匹配（兼容自定义 UUID 设备）
+        if write_char.is_none() && notify_char.is_none() {
+            log::warn!("[Scale] 未找到标准 nRF52 UART 特征，尝试按属性匹配...");
+            for service in &services {
+                for characteristic in &service.characteristics {
+                    if characteristic.properties.contains(CharPropFlags::NOTIFY)
+                        && notify_char.is_none()
+                    {
+                        notify_char = Some(characteristic.clone());
+                        log::info!("[Scale] ⚠ 按属性匹配 Notify 特征: {}", characteristic.uuid);
+                    }
+                    if characteristic.properties.contains(CharPropFlags::WRITE)
+                        && write_char.is_none()
+                    {
+                        write_char = Some(characteristic.clone());
+                        log::info!("[Scale] ⚠ 按属性匹配 Write 特征: {}", characteristic.uuid);
+                    }
+                    if characteristic.properties.contains(CharPropFlags::WRITE_WITHOUT_RESPONSE)
+                        && write_char_no_resp.is_none()
+                    {
+                        write_char_no_resp = Some(characteristic.clone());
+                    }
                 }
             }
         }
 
         // 优先使用支持 WRITE 的特征，其次用 WRITE_WITHOUT_RESPONSE
         let final_write_char = write_char.or(write_char_no_resp);
+
+        // 增强错误诊断：如果未找到写入特征，输出所有特征信息
+        if final_write_char.is_none() {
+            let all_chars: Vec<String> = services.iter()
+                .flat_map(|s| s.characteristics.iter().map(|c| format!("{} ({:?})", c.uuid, c.properties)))
+                .collect();
+            log::error!("[Scale] 未找到可写入特征！所有特征: {:?}", all_chars);
+        }
 
         let notify_c = notify_char
             .ok_or_else(|| "未找到 Notify 特征，无法接收数据".to_string())?;
@@ -286,7 +318,49 @@ impl ScaleManager {
             address.to_string()
         };
 
-        // 4. 短暂加锁，将状态存入 inner
+        // 4. 探测写入：触发 Windows 配对流程（在存储状态之前执行）
+        if let Some(ref wc) = final_write_char {
+            log::info!("[Scale] 尝试探测写入以触发 Windows 配对（特征: {}, 属性: {:?}）...", wc.uuid, wc.properties);
+            let probe_data: &[u8] = &[0xAA]; // 不完整帧，设备会忽略
+            let write_type = if wc.properties.contains(CharPropFlags::WRITE) {
+                WriteType::WithResponse
+            } else {
+                WriteType::WithoutResponse
+            };
+            match peripheral.write(wc, probe_data, write_type).await {
+                Ok(_) => {
+                    log::info!("[Scale] 探测写入成功，设备已就绪（无需配对或已配对）");
+                }
+                Err(e) => {
+                    log::warn!("[Scale] 探测写入失败（可能正在触发 Windows 配对弹窗）: {}", e);
+                    // Windows 可能弹出配对提示，等待用户确认
+                    log::info!("[Scale] 等待 3 秒以便用户完成配对确认...");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                    // 重试一次
+                    match peripheral.write(wc, probe_data, write_type).await {
+                        Ok(_) => log::info!("[Scale] 配对后探测写入重试成功，设备已就绪"),
+                        Err(e2) => {
+                            log::warn!("[Scale] 配对后探测写入重试仍失败: {}", e2);
+                            log::warn!("[Scale] 尝试备选写入方式...");
+                            // 尝试另一种写入方式
+                            let alt_write_type = if write_type == WriteType::WithResponse {
+                                WriteType::WithoutResponse
+                            } else {
+                                WriteType::WithResponse
+                            };
+                            match peripheral.write(wc, probe_data, alt_write_type).await {
+                                Ok(_) => log::info!("[Scale] 备选写入方式 ({:?}) 成功", alt_write_type),
+                                Err(e3) => log::warn!("[Scale] 所有探测写入均失败: {}，后续写入可能需要用户手动配对设备", e3),
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            log::warn!("[Scale] 未找到 Write 特征，跳过探测写入");
+        }
+
+        // 5. 短暂加锁，将状态存入 inner
         {
             let mut inner = self.inner.lock().await;
             inner.peripheral = Some(peripheral.clone());
@@ -303,7 +377,7 @@ impl ScaleManager {
 
         log::info!("[Scale] 设备已连接: {} ({})", device_name, address);
 
-        // 5. 启动数据接收循环（锁外）
+        // 6. 启动数据接收循环（锁外）
         let inner_arc = self.inner.clone();
         let app_clone = app.clone();
         tokio::spawn(async move {
@@ -502,7 +576,25 @@ impl ScaleManager {
             }
         }
 
-        Err(format!("写入数据失败: {}", last_error))
+        // 所有写入方式均失败 — 延迟重试机制（应对 Windows 配对延迟 / GATT 缓存未同步）
+        log::warn!("[Scale] 首轮写入全部失败，等待 2 秒后重试（可能需要等待 Windows 配对完成）...");
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+        for write_type in &write_types {
+            log::info!("[Scale] [重试] 尝试写入方式: {:?}", write_type);
+            match peripheral.write(&write_c, data, *write_type).await {
+                Ok(_) => {
+                    log::info!("[Scale] [重试] 写入成功 ({:?})", write_type);
+                    return Ok(());
+                }
+                Err(e) => {
+                    last_error = format!("{}", e);
+                    log::warn!("[Scale] [重试] 写入失败 ({:?}): {}", write_type, e);
+                }
+            }
+        }
+
+        Err(format!("写入数据失败（含重试）: {}", last_error))
     }
 }
 
