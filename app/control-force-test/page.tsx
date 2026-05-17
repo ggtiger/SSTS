@@ -780,13 +780,13 @@ export default function ControlForceTestPage() {
                   <td colSpan={2} className="border border-slate-300 px-2 py-0.5">
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-semibold text-slate-600 whitespace-nowrap">鉴别力阈</span>
-                      <NumericInput className={inputClass} value={extraData.discriminationValue} onChange={val => setExtraData({...extraData, discriminationValue: val})} placeholder="手填" title="鉴别力阈" />
+                      <NumericInput className={inputClass} value={extraData.discriminationValue} onChange={val => setExtraData({...extraData, discriminationValue: val})} placeholder="手动输入" title="鉴别力阈" />
                     </div>
                   </td>
                   <td colSpan={2} className="border border-slate-300 px-2 py-0.5">
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-semibold text-slate-600 whitespace-nowrap">分度值</span>
-                      <NumericInput className={inputClass} value={extraData.discriminationRepeat} onChange={val => setExtraData({...extraData, discriminationRepeat: val})} placeholder="手填" title="重复性" />
+                      <NumericInput className={inputClass} value={extraData.discriminationRepeat} onChange={val => setExtraData({...extraData, discriminationRepeat: val})} placeholder="手动输入" title="重复性" />
                     </div>
                   </td>
                   <td colSpan={3} className="border border-slate-300 px-2 py-1"></td>
@@ -796,7 +796,7 @@ export default function ControlForceTestPage() {
                   <td colSpan={4} className="border border-slate-300 px-2 py-0.5">
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-semibold text-slate-600 whitespace-nowrap">测量范围</span>
-                      <NumericInput className={inputClass} value={extraData.measureRange} onChange={val => setExtraData({...extraData, measureRange: val})} placeholder="手填" title="测量范围" />
+                      <NumericInput className={inputClass} value={extraData.measureRange} onChange={val => setExtraData({...extraData, measureRange: val})} placeholder="手动输入" title="测量范围" />
                     </div>
                   </td>
                   <td colSpan={3} className="border border-slate-300 px-2 py-1"></td>
