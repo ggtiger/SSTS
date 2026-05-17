@@ -12,9 +12,9 @@ import { useUpdaterStore } from '@/lib/store'
 
 const navItems = [
   { label: '首页', icon: 'dashboard', href: '/' },
-  { label: '制动', icon: 'car_repair', href: '/brake-test' },
-  { label: '转向', icon: 'settings_input_component', href: '/steering-test' },
-  { label: '力矩', icon: 'vibration', href: '/torque-test' },
+  { label: '便携制动', icon: 'car_repair', href: '/brake-test' },
+  { label: '转向角', icon: 'settings_input_component', href: '/steering-test' },
+  { label: '转向力', icon: 'vibration', href: '/torque-test' },
   { label: '操纵力', icon: 'pan_tool', href: '/control-force-test' },
   { label: '调试', icon: 'bug_report', href: '/debug' },
 ]

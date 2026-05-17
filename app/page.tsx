@@ -114,7 +114,7 @@ export default function HomePage() {
         <div className="industrial-card rounded-xl p-md flex flex-col md:flex-row items-center justify-between gap-md bg-white border-l-4 border-l-primary-container">
           <div>
             <h1 className="font-headline-lg text-headline-lg text-primary tracking-tight">
-              机动车角度综合校准装置
+              载具角度综合校准装置
             </h1>
           </div>
           <div className="flex items-center gap-sm">
