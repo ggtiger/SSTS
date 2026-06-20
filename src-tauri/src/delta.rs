@@ -82,74 +82,137 @@ pub async fn verify_file_hash(path: String, expected_hash: String) -> Result<boo
 }
 
 /// 通过 curl 获取远程 JSON（绕过浏览器 CORS 限制）
+/// Android 端使用 ureq 纯 Rust HTTP 客户端（无 curl 可用）
 #[tauri::command]
 pub async fn fetch_url(url: String) -> Result<String, String> {
     delta_log(&format!("[Delta] fetch_url 请求: {}", url));
-    let curl = if cfg!(target_os = "windows") { "curl.exe" } else { "curl" };
-    let mut cmd = Command::new(curl);
-    cmd.args(&["-sL", "--connect-timeout", "15", "--max-time", "30"]);
-    #[cfg(target_os = "windows")]
+
+    // Android: 使用 ureq HTTP 客户端（系统无 curl）
+    #[cfg(target_os = "android")]
     {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        let body = ureq::get(&url)
+            .timeout(std::time::Duration::from_secs(30))
+            .call()
+            .map_err(|e| {
+                delta_log(&format!("[Delta] fetch_url ureq 请求失败: {} | URL: {}", e, url));
+                format!("HTTP 请求失败: {}", e)
+            })?
+            .into_string()
+            .map_err(|e| {
+                delta_log(&format!("[Delta] fetch_url ureq 读取响应失败: {} | URL: {}", e, url));
+                format!("读取响应失败: {}", e)
+            })?;
+
+        let truncated = if body.len() > 500 { &body[..500] } else { &body };
+        delta_log(&format!("[Delta] fetch_url 响应: {} chars, 内容: {}{}", body.len(), truncated, if body.len() > 500 { "...(truncated)" } else { "" }));
+        return Ok(body);
     }
-    cmd.arg(&url);
 
-    let output = cmd.output()
-        .map_err(|e| {
-            delta_log(&format!("[Delta] fetch_url curl 执行失败: {} | URL: {}", e, url));
-            format!("执行 curl 失败: {}", e)
-        })?;
+    // 桌面端: 使用 curl 命令行
+    #[cfg(not(target_os = "android"))]
+    {
+        let curl = if cfg!(target_os = "windows") { "curl.exe" } else { "curl" };
+        let mut cmd = Command::new(curl);
+        cmd.args(&["-sL", "--connect-timeout", "15", "--max-time", "30"]);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        cmd.arg(&url);
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        delta_log(&format!("[Delta] fetch_url curl 返回错误: status={}, stderr={} | URL: {}", output.status, stderr, url));
-        return Err(format!("curl 返回错误: {}", stderr));
+        let output = cmd.output()
+            .map_err(|e| {
+                delta_log(&format!("[Delta] fetch_url curl 执行失败: {} | URL: {}", e, url));
+                format!("执行 curl 失败: {}", e)
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            delta_log(&format!("[Delta] fetch_url curl 返回错误: status={}, stderr={} | URL: {}", output.status, stderr, url));
+            return Err(format!("curl 返回错误: {}", stderr));
+        }
+
+        let body = String::from_utf8_lossy(&output.stdout).into_owned();
+        let truncated = if body.len() > 500 { &body[..500] } else { &body };
+        delta_log(&format!("[Delta] fetch_url 响应: {} chars, 内容: {}{}" , body.len(), truncated, if body.len() > 500 { "...(truncated)" } else { "" }));
+
+        Ok(body)
     }
-
-    let body = String::from_utf8_lossy(&output.stdout).into_owned();
-    let truncated = if body.len() > 500 { &body[..500] } else { &body };
-    delta_log(&format!("[Delta] fetch_url 响应: {} chars, 内容: {}{}" , body.len(), truncated, if body.len() > 500 { "...(truncated)" } else { "" }));
-
-    Ok(body)
 }
 
 /// 通过 curl 下载文件到指定路径（绕过浏览器 CORS 限制）
+/// Android 端使用 ureq 纯 Rust HTTP 客户端（无 curl 可用）
 #[tauri::command]
 pub async fn download_file(url: String, path: String) -> Result<(), String> {
     delta_log(&format!("[Delta] download_file 开始: URL={}, 目标路径={}", url, path));
-    let curl = if cfg!(target_os = "windows") { "curl.exe" } else { "curl" };
-    let mut cmd = Command::new(curl);
-    cmd.args(&["-sL", "-f", "--connect-timeout", "30", "--max-time", "300"]);
-    cmd.args(&["-o", &path]);
-    #[cfg(target_os = "windows")]
+
+    // Android: 使用 ureq HTTP 客户端
+    #[cfg(target_os = "android")]
     {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        // 确保目标目录存在
+        if let Some(parent) = Path::new(&path).parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
+        }
+
+        let response = ureq::get(&url)
+            .timeout(std::time::Duration::from_secs(300))
+            .call()
+            .map_err(|e| {
+                delta_log(&format!("[Delta] download_file ureq 请求失败: {} | URL: {}", e, url));
+                format!("下载失败: {}", e)
+            })?;
+
+        let mut reader = response.into_reader();
+        let mut file = fs::File::create(&path)
+            .map_err(|e| format!("创建文件失败: {}", e))?;
+        io::copy(&mut reader, &mut file)
+            .map_err(|e| {
+                let _ = fs::remove_file(&path);
+                format!("写入文件失败: {}", e)
+            })?;
+
+        match fs::metadata(&path) {
+            Ok(meta) => delta_log(&format!("[Delta] download_file 完成: 文件大小={} bytes, 路径={}", meta.len(), path)),
+            Err(_) => delta_log(&format!("[Delta] download_file 完成: 无法读取文件大小, 路径={}", path)),
+        }
+        return Ok(());
     }
-    cmd.arg(&url);
 
-    let output = cmd.output()
-        .map_err(|e| {
-            delta_log(&format!("[Delta] download_file curl 执行失败: {} | URL: {}", e, url));
-            format!("执行 curl 失败: {}", e)
-        })?;
+    // 桌面端: 使用 curl 命令行
+    #[cfg(not(target_os = "android"))]
+    {
+        let curl = if cfg!(target_os = "windows") { "curl.exe" } else { "curl" };
+        let mut cmd = Command::new(curl);
+        cmd.args(&["-sL", "-f", "--connect-timeout", "30", "--max-time", "300"]);
+        cmd.args(&["-o", &path]);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        cmd.arg(&url);
 
-    if !output.status.success() {
-        // 清理不完整的文件
-        let _ = fs::remove_file(&path);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        delta_log(&format!("[Delta] download_file 失败: status={}, stderr={} | URL: {}", output.status, stderr, url));
-        return Err(format!("下载失败: {}", stderr));
+        let output = cmd.output()
+            .map_err(|e| {
+                delta_log(&format!("[Delta] download_file curl 执行失败: {} | URL: {}", e, url));
+                format!("执行 curl 失败: {}", e)
+            })?;
+
+        if !output.status.success() {
+            let _ = fs::remove_file(&path);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            delta_log(&format!("[Delta] download_file 失败: status={}, stderr={} | URL: {}", output.status, stderr, url));
+            return Err(format!("下载失败: {}", stderr));
+        }
+
+        match fs::metadata(&path) {
+            Ok(meta) => delta_log(&format!("[Delta] download_file 完成: 文件大小={} bytes, 路径={}", meta.len(), path)),
+            Err(_) => delta_log(&format!("[Delta] download_file 完成: 无法读取文件大小, 路径={}", path)),
+        }
+
+        Ok(())
     }
-
-    // 记录下载文件大小
-    match fs::metadata(&path) {
-        Ok(meta) => delta_log(&format!("[Delta] download_file 完成: 文件大小={} bytes, 路径={}", meta.len(), path)),
-        Err(_) => delta_log(&format!("[Delta] download_file 完成: 无法读取文件大小, 路径={}", path)),
-    }
-
-    Ok(())
 }
 
 /// 计算 SHA-256 哈希（返回 hex 字符串）

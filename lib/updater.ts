@@ -10,6 +10,18 @@
 import { isTauri } from './tauri'
 import { loadConfig, DEFAULT_CONFIG } from './config'
 
+/** 判断是否运行在移动平台（Android/iOS），移动端不支持 updater */
+function isMobilePlatform(): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { platform } = require('@tauri-apps/plugin-os')
+    const p = platform()
+    return p === 'android' || p === 'ios'
+  } catch {
+    return false
+  }
+}
+
 async function updateLog(msg: string) {
   console.log(msg);
   try {
@@ -164,10 +176,56 @@ async function fetchLatestJsonWithRetry(maxRetries = 2): Promise<Record<string, 
   return null
 }
 
-// ============ 全量更新（Tauri updater） ============
+// ============ 全量更新（Tauri updater / Android APK） ============
+
+/**
+ * 检查 Android 端 APK 全量更新
+ * 通过 latest.json 对比版本，如果有新版提供下载链接
+ */
+async function checkAndroidUpdate(): Promise<UpdateInfo | null> {
+  try {
+    const { getVersion } = await import('@tauri-apps/api/app')
+    const currentVersion = await getVersion()
+    updateLog(`[Android] checkAndroidUpdate | 当前版本: ${currentVersion}`)
+
+    const latestJson = await fetchLatestJsonWithRetry()
+    if (!latestJson) {
+      updateLog(`[Android] latest.json 获取失败`)
+      return null
+    }
+
+    const remoteVersion = (latestJson.version as string) || ''
+    if (!remoteVersion || !isVersionNewer(remoteVersion, currentVersion)) {
+      updateLog(`[Android] 无需更新: local=${currentVersion} remote=${remoteVersion || 'N/A'}`)
+      return null
+    }
+
+    // 查找 Android APK 下载链接
+    const platforms = latestJson.platforms as Record<string, { url?: string }> | undefined
+    const androidEntry = platforms?.['android-aarch64'] ?? platforms?.['android-arm64'] ?? platforms?.['android-universal']
+    const downloadUrl = androidEntry?.url
+
+    updateLog(`[Android] 发现新版本 v${remoteVersion}, downloadUrl=${downloadUrl ?? 'N/A'}`)
+    return {
+      version: remoteVersion,
+      date: (latestJson.date as string) ?? undefined,
+      body: (latestJson.notes as string) || '发现新版本，请下载 APK 更新安装。',
+      canAutoInstall: false,
+      downloadUrl,
+    }
+  } catch (err) {
+    updateLog(`[Android] checkAndroidUpdate 失败: ${err}`)
+    return null
+  }
+}
 
 export async function checkForUpdate(): Promise<UpdateInfo | null> {
   if (!isTauri()) return null
+
+  // 移动平台: 跳过 Tauri plugin-updater，使用 Android 专用检查
+  if (isMobilePlatform()) {
+    return checkAndroidUpdate()
+  }
 
   try {
     const { getVersion } = await import('@tauri-apps/api/app')
@@ -242,7 +300,7 @@ let _pendingUpdate: any = null
 export async function downloadUpdate(
   onProgress?: (progress: UpdateProgress) => void,
 ): Promise<void> {
-  if (!isTauri()) throw new Error('仅 Tauri 桌面模式支持更新')
+  if (!isTauri() || isMobilePlatform()) throw new Error('仅 Tauri 桌面模式支持更新')
 
   updateLog(`[Updater] ====== 全量更新下载开始 ======`)
   const { check } = await import('@tauri-apps/plugin-updater')
@@ -288,6 +346,7 @@ export async function downloadUpdate(
 }
 
 export async function installAndRelaunch(): Promise<void> {
+  if (isMobilePlatform()) return
   if (!_pendingUpdate) throw new Error('没有已下载的更新')
   updateLog(`[Updater] 开始安装全量更新并重启...`)
   const { relaunch } = await import('@tauri-apps/plugin-process')
@@ -385,7 +444,7 @@ export async function downloadServerUpdate(
   info: ServerUpdateInfo,
   onProgress?: (percent: number) => void,
 ): Promise<{ localPath: string; version: string }> {
-  if (!isTauri()) throw new Error('仅 Tauri 桌面模式支持更新')
+  if (!isTauri()) throw new Error('仅 Tauri 模式支持更新')
 
   const { invoke } = await import('@tauri-apps/api/core')
   const { appDataDir, join } = await import('@tauri-apps/api/path')
@@ -492,7 +551,13 @@ export async function applyServerUpdate(
   restartServer: boolean = true,
   willRelaunch: boolean = false,
 ): Promise<void> {
-  if (!isTauri()) throw new Error('仅 Tauri 桌面模式支持更新')
+  if (!isTauri()) throw new Error('仅 Tauri 模式支持更新')
+
+  // 移动端没有独立 server 进程，跳过重启逻辑
+  const mobile = isMobilePlatform()
+  if (mobile) {
+    restartServer = false
+  }
 
   const { invoke } = await import('@tauri-apps/api/core')
 
@@ -565,24 +630,28 @@ export async function startupUpdateCheck(
   try {
     updateLog(`[Startup] ====== 启动时更新检查开始 ======`)
     onProgress?.('loading', 80, '检查更新...')
+    const mobile = isMobilePlatform()
 
-    // 1. 优先检查 Tauri 壳全量更新
+    // 1. 检查全量更新（桌面: Tauri updater, Android: APK 检查）
     try {
-      const tauriUpdate = await checkForUpdate()
-      if (tauriUpdate) {
-        if (tauriUpdate.canAutoInstall) {
-          onTauriUpdate?.(tauriUpdate)
-          onProgress?.('loading', 85, `发现新版本 v${tauriUpdate.version}，请前往设置安装`)
-          updateLog(`[Startup] 发现 Tauri 全量更新 v${tauriUpdate.version}（可自动安装），跳过 server 热更新`)
+      const fullUpdate = await checkForUpdate()
+      if (fullUpdate) {
+        if (fullUpdate.canAutoInstall) {
+          // 桌面端: Tauri updater 可自动安装
+          onTauriUpdate?.(fullUpdate)
+          onProgress?.('loading', 85, `发现新版本 v${fullUpdate.version}，请前往设置安装`)
+          updateLog(`[Startup] 发现全量更新 v${fullUpdate.version}（可自动安装），跳过 server 热更新`)
           await delay(2000)
           onProgress?.('loading', 100, '启动中...')
           return false
         } else {
-          updateLog(`[Startup] 发现 Tauri 全量更新 v${tauriUpdate.version}（仅手动下载），继续检查 server 热更新`)
+          // Android 或手动下载: 通知用户但继续检查热更新
+          onTauriUpdate?.(fullUpdate)
+          updateLog(`[Startup] 发现全量更新 v${fullUpdate.version}（${mobile ? 'Android APK' : '手动下载'}），继续检查 server 热更新`)
         }
       }
-    } catch (tauriErr) {
-      updateLog(`[Startup] Tauri 全量更新检查失败，继续检查 server 热更新: ${tauriErr}`)
+    } catch (fullErr) {
+      updateLog(`[Startup] 全量更新检查失败，继续检查 server 热更新: ${fullErr}`)
     }
 
     // 2. 无全量更新，再检查 server 热更新
@@ -662,19 +731,19 @@ export class AutoUpdater {
     if (this.checking) return
     this.checking = true
     try {
-      // 1. 优先检查 Tauri 壳全量更新
+      // 1. 检查全量更新（桌面: Tauri updater, Android: APK 检查）
       try {
-        const tauriUpdate = await checkForUpdate()
-        if (tauriUpdate) {
-          callbacks.onTauriUpdate?.(tauriUpdate)
-          if (tauriUpdate.canAutoInstall) {
-            updateLog(`[AutoUpdater] 发现全量更新: ${tauriUpdate.version}（可自动安装），跳过 server 热更新`)
+        const fullUpdate = await checkForUpdate()
+        if (fullUpdate) {
+          callbacks.onTauriUpdate?.(fullUpdate)
+          if (fullUpdate.canAutoInstall) {
+            updateLog(`[AutoUpdater] 发现全量更新: ${fullUpdate.version}（可自动安装），跳过 server 热更新`)
             return
           }
-          updateLog(`[AutoUpdater] 发现全量更新: ${tauriUpdate.version}（仅手动下载），继续检查 server 热更新`)
+          updateLog(`[AutoUpdater] 发现全量更新: ${fullUpdate.version}（${isMobilePlatform() ? 'Android APK' : '手动下载'}），继续检查 server 热更新`)
         }
-      } catch (tauriErr) {
-        updateLog(`[AutoUpdater] Tauri 全量更新检查失败，继续检查 server 热更新: ${tauriErr}`)
+      } catch (fullErr) {
+        updateLog(`[AutoUpdater] 全量更新检查失败，继续检查 server 热更新: ${fullErr}`)
       }
 
       // 2. 检查 server 热更新

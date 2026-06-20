@@ -63,5 +63,8 @@ next-env.d.ts
 /src-tauri/.tauri-private-key
 /src-tauri/.tauri-private-key.pub
 
+# android keystore
+*.keystore
+
 # deploy
 /dist/

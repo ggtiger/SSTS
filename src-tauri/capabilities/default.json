@@ -33,7 +33,6 @@
     "core:window:allow-hide",
     "dialog:default",
     "dialog:allow-save",
-    "updater:default",
     "notification:default",
     "os:default",
     "process:default",

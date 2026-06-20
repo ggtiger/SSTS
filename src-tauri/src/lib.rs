@@ -9,6 +9,60 @@ mod config;
 mod delta;
 mod comm;
 
+// ============ Android BLE 初始化 ============
+// btleplug 在 Android 上需要通过 JNI 初始化 droidplug 后端。
+// JNI_OnLoad 在 System.loadLibrary() 时由 JVM 自动调用，
+// 此时传入 JavaVM 指针，我们用它来初始化 btleplug。
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub unsafe extern "system" fn JNI_OnLoad(
+    vm: *mut jni::sys::JavaVM,
+    _reserved: *mut std::ffi::c_void,
+) -> jni::sys::jint {
+    eprintln!("[BLE] JNI_OnLoad called, initializing btleplug...");
+
+    let jvm = match jni::JavaVM::from_raw(vm) {
+        Ok(jvm) => {
+            eprintln!("[BLE] JavaVM created successfully");
+            jvm
+        }
+        Err(e) => {
+            eprintln!("[BLE] FATAL: Failed to create JavaVM: {}", e);
+            return jni::sys::JNI_VERSION_1_6;
+        }
+    };
+
+    let env = match jvm.get_env() {
+        Ok(env) => {
+            eprintln!("[BLE] Got JNIEnv from get_env()");
+            env
+        }
+        Err(_) => {
+            eprintln!("[BLE] get_env() failed, trying attach_current_thread_permanently...");
+            match jvm.attach_current_thread_permanently() {
+                Ok(env) => {
+                    eprintln!("[BLE] Thread attached successfully");
+                    env
+                }
+                Err(e) => {
+                    eprintln!("[BLE] FATAL: Failed to attach thread: {}", e);
+                    return jni::sys::JNI_VERSION_1_6;
+                }
+            }
+        }
+    };
+
+    match btleplug::platform::init(&env) {
+        Ok(_) => eprintln!("[BLE] btleplug droidplug initialized successfully"),
+        Err(e) => {
+            eprintln!("[BLE] FATAL: btleplug init failed: {:?}", e);
+            eprintln!("[BLE] Possible: ProGuard deleted Java classes or permissions missing");
+        }
+    }
+
+    jni::sys::JNI_VERSION_1_6
+}
+
 /// 服务器状态
 pub struct ServerState {
     pub child: Mutex<Option<Child>>,
@@ -37,6 +91,7 @@ const SPLASH_HTML: &str = include_str!("../splash.html");
 const APP_ICON_PNG: &[u8] = include_bytes!("../icons/icon.png");
 
 /// 创建 splash 窗口，通过自定义协议 splashpage:// 加载内嵌的 HTML
+#[cfg(desktop)]
 fn create_splash_window(handle: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
     // 構建平台特定的自定义协议 URL
     // macOS/Linux: splashpage://localhost
@@ -107,6 +162,7 @@ fn read_app_theme(app: &tauri::AppHandle) -> String {
 }
 
 /// 将主题设置应用到 splash 窗口
+#[cfg(desktop)]
 fn apply_splash_theme(app: &tauri::AppHandle) {
     let theme = read_app_theme(app);
     // "system" 时不设置 data-theme，让 splash 用 prefers-color-scheme
@@ -1165,12 +1221,15 @@ fn navigate_to(path: String, state: tauri::State<ServerState>, app: tauri::AppHa
 #[tauri::command]
 fn app_ready(app: tauri::AppHandle) {
     println!("[VACDevice] Frontend signaled ready");
-    if let Some(splash) = app.get_webview_window("splash") {
-        let _ = splash.close();
-    }
-    if let Some(main) = app.get_webview_window("main") {
-        let _ = main.show();
-        let _ = main.set_focus();
+    #[cfg(desktop)]
+    {
+        if let Some(splash) = app.get_webview_window("splash") {
+            let _ = splash.close();
+        }
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.show();
+            let _ = main.set_focus();
+        }
     }
 }
 
@@ -1285,10 +1344,12 @@ fn run_production_startup(handle: &tauri::AppHandle) {
         let url = format!("http://127.0.0.1:{}", port);
         let _ = main.navigate(url.parse().unwrap());
     }
+    #[cfg(desktop)]
     finalize_launch(handle, 15);
 }
 
 /// 等待前端 app_ready 信号或超时后强制切换
+#[cfg(desktop)]
 fn finalize_launch(handle: &tauri::AppHandle, timeout_secs: u64) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     while std::time::Instant::now() < deadline {
@@ -1311,6 +1372,7 @@ fn finalize_launch(handle: &tauri::AppHandle, timeout_secs: u64) {
 
 // ============ 主入口 ============
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Windows WebView2: 仅禁用 SmartScreen，保留 DirectComposition 硬件加速合成
     // 注意：--disable-direct-composition 会禁用 GPU 合成路径，导致滚动严重卡顿
@@ -1325,7 +1387,11 @@ pub fn run() {
     let is_dev = cfg!(debug_assertions);
     let remote_url = std::env::var("GCLAW_REMOTE_URL").ok();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // 桌面端专有插件（单实例、更新器）
+    #[cfg(desktop)]
+    let builder = builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // 第二个实例启动时，聚焦已有窗口
             if let Some(window) = app.get_webview_window("main") {
@@ -1334,9 +1400,11 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        .plugin(tauri_plugin_updater::Builder::new().build());
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
         // 注册自定义协议 splashpage:// 用于提供嵌入的 splash HTML
@@ -1361,6 +1429,7 @@ pub fn run() {
         .on_page_load(|webview, payload| {
             if webview.label() == "splash" {
                 if let tauri::webview::PageLoadEvent::Finished = payload.event() {
+                    #[cfg(desktop)]
                     let _ = webview.window().show();
                     println!("[VACDevice] Splash page loaded, window shown");
                 }
@@ -1382,6 +1451,7 @@ pub fn run() {
             app.manage(config::ConfigManager::new(app_data_dir));
 
             // 关闭行为：根据配置决定是隐藏到托盘还是直接关闭
+            #[cfg(desktop)]
             if let Some(main_window) = app.get_webview_window("main") {
                 let app_handle: tauri::AppHandle = app.handle().clone();
                 main_window.on_window_event(move |event| {
@@ -1411,19 +1481,25 @@ pub fn run() {
                     std::thread::sleep(std::time::Duration::from_millis(500));
                     if let Some(window) = handle.get_webview_window("main") {
                         let _ = window.navigate(remote.parse().unwrap());
-                        let _ = window.show();
-                        let _ = window.set_focus();
+                        #[cfg(desktop)]
+                        {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
                     }
                 });
             } else {
                 // ---- 开发模式 / 生产模式：动态创建 splash 窗口 ----
                 let handle = app.handle().clone();
 
-                create_splash_window(&handle);
+                #[cfg(desktop)]
+                {
+                    create_splash_window(&handle);
 
-                // 应用主题到 splash 窗口
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                apply_splash_theme(&handle);
+                    // 应用主题到 splash 窗口
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    apply_splash_theme(&handle);
+                }
 
                 if is_dev {
                     // ---- 开发模式 ----
@@ -1451,6 +1527,7 @@ pub fn run() {
                             let _ = main.navigate("http://localhost:3200".parse().unwrap());
                         }
                         // 等待前端 app_ready 或超时
+                        #[cfg(desktop)]
                         finalize_launch(&h, 15);
                     });
                 } else {
@@ -1468,6 +1545,7 @@ pub fn run() {
             // 设置 CommManager 的 AppHandle
             app.state::<comm::CommManager>().set_app_handle(app.handle().clone());
 
+            #[cfg(desktop)]
             setup_tray(app)?;
             Ok(())
         })
@@ -1526,11 +1604,10 @@ pub fn run() {
 
 // ============ 系统托盘 ============
 
-// ============ 系统托盘 ============
-
-// 闪烁状态
+#[cfg(desktop)]
 pub struct FlashState(pub Arc<AtomicBool>);
 
+#[cfg(desktop)]
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::menu::{Menu, MenuItem};
     use tauri::tray::TrayIconBuilder;
@@ -1583,6 +1660,7 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// 前端调用：开始托盘图标闪烁
+#[cfg(desktop)]
 #[tauri::command]
 fn flash_tray_icon(app: tauri::AppHandle, state: tauri::State<'_, FlashState>) {
     let flashing = state.0.clone();
@@ -1624,4 +1702,11 @@ fn flash_tray_icon(app: tauri::AppHandle, state: tauri::State<'_, FlashState>) {
             }
         });
     });
+}
+
+/// 移动端 flash_tray_icon 空实现
+#[cfg(not(desktop))]
+#[tauri::command]
+fn flash_tray_icon() {
+    // no-op on mobile
 }
