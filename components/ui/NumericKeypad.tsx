@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useCallback } from 'react'
+import { useEffect, useCallback, useState } from 'react'
 
 export interface NumericKeypadProps {
   isOpen: boolean
@@ -28,6 +28,28 @@ export default function NumericKeypad({
   allowMultipleDots = false,
   maxDecimalPlaces,
 }: NumericKeypadProps) {
+  // 全选状态：键盘刚打开且有值时，数字高亮选中，按数字键替换整个内容
+  const [allSelected, setAllSelected] = useState(false)
+
+  // 当键盘打开且有值时，自动进入全选状态
+  useEffect(() => {
+    if (isOpen && value) {
+      setAllSelected(true)
+    } else {
+      setAllSelected(false)
+    }
+  }, [isOpen])
+
+  // 全选状态下替换值的辅助函数
+  const replaceOrAppend = useCallback((newVal: string) => {
+    if (allSelected) {
+      onValueChange(newVal)
+      setAllSelected(false)
+    } else {
+      onValueChange(value + newVal)
+    }
+  }, [allSelected, value, onValueChange])
+
   const formatAndConfirm = useCallback((val: string) => {
     if (maxDecimalPlaces !== undefined && !allowMultipleDots && val !== '') {
       const num = parseFloat(val)
@@ -51,34 +73,46 @@ export default function NumericKeypad({
         onClose()
       } else if (e.key === 'Backspace') {
         e.preventDefault()
-        onValueChange(value.slice(0, -1))
+        if (allSelected) {
+          onValueChange('')
+          setAllSelected(false)
+        } else {
+          onValueChange(value.slice(0, -1))
+        }
       } else if (/^[0-9]$/.test(e.key)) {
         e.preventDefault()
         if (maxDecimalPlaces !== undefined && !allowMultipleDots) {
-          const dotIndex = value.indexOf('.')
+          const checkVal = allSelected ? '' : value
+          const dotIndex = checkVal.indexOf('.')
           if (dotIndex !== -1) {
-            const decimalPart = value.substring(dotIndex + 1)
+            const decimalPart = checkVal.substring(dotIndex + 1)
             if (decimalPart.length >= maxDecimalPlaces) {
               return
             }
           }
         }
-        onValueChange(value + e.key)
+        replaceOrAppend(e.key)
       } else if (e.key === '.' && allowDecimal) {
         e.preventDefault()
-        if (allowMultipleDots || !value.includes('.')) {
+        if (allSelected) {
+          onValueChange('0.')
+          setAllSelected(false)
+        } else if (allowMultipleDots || !value.includes('.')) {
           onValueChange(value + '.')
         }
       } else if (e.key === '-' && allowNegative) {
         e.preventDefault()
-        if (value.startsWith('-')) {
+        if (allSelected) {
+          onValueChange('-')
+          setAllSelected(false)
+        } else if (value.startsWith('-')) {
           onValueChange(value.slice(1))
         } else {
           onValueChange('-' + value)
         }
       }
     },
-    [isOpen, value, onValueChange, onClose, allowDecimal, allowNegative, allowMultipleDots, maxDecimalPlaces, formatAndConfirm]
+    [isOpen, value, onValueChange, onClose, allowDecimal, allowNegative, allowMultipleDots, maxDecimalPlaces, formatAndConfirm, allSelected, replaceOrAppend]
   )
 
   useEffect(() => {
@@ -90,34 +124,50 @@ export default function NumericKeypad({
 
   const handleDigit = (digit: string) => {
     if (maxDecimalPlaces !== undefined && !allowMultipleDots) {
-      const dotIndex = value.indexOf('.')
+      const checkVal = allSelected ? '' : value
+      const dotIndex = checkVal.indexOf('.')
       if (dotIndex !== -1) {
-        const decimalPart = value.substring(dotIndex + 1)
+        const decimalPart = checkVal.substring(dotIndex + 1)
         if (decimalPart.length >= maxDecimalPlaces) {
           return
         }
       }
     }
-    onValueChange(value + digit)
+    replaceOrAppend(digit)
   }
 
   const handleDot = () => {
     if (!allowDecimal) return
-    if (!allowMultipleDots && value.includes('.')) return
-    onValueChange(value + '.')
+    if (allSelected) {
+      onValueChange('0.')
+      setAllSelected(false)
+    } else if (!allowMultipleDots && value.includes('.')) {
+      return
+    } else {
+      onValueChange(value + '.')
+    }
   }
 
   const handleBackspace = () => {
-    onValueChange(value.slice(0, -1))
+    if (allSelected) {
+      onValueChange('')
+      setAllSelected(false)
+    } else {
+      onValueChange(value.slice(0, -1))
+    }
   }
 
   const handleClear = () => {
     onValueChange('')
+    setAllSelected(false)
   }
 
   const handleToggleSign = () => {
     if (!allowNegative) return
-    if (value.startsWith('-')) {
+    if (allSelected) {
+      onValueChange('-')
+      setAllSelected(false)
+    } else if (value.startsWith('-')) {
       onValueChange(value.slice(1))
     } else {
       onValueChange('-' + value)
@@ -171,8 +221,14 @@ export default function NumericKeypad({
               <span className="material-symbols-outlined text-xl">close</span>
             </button>
           </div>
-          <div className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-right">
-            <span className="text-2xl font-mono font-bold text-slate-800 tracking-wide">
+          <div className={`w-full px-4 py-3 border rounded-xl text-right ${
+            allSelected && value
+              ? 'bg-blue-100 border-blue-400'
+              : 'bg-slate-50 border-slate-200'
+          }`}>
+            <span className={`text-2xl font-mono font-bold tracking-wide ${
+              allSelected && value ? 'text-blue-700' : 'text-slate-800'
+            }`}>
               {value || <span className="text-slate-300">0</span>}
             </span>
           </div>

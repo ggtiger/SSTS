@@ -104,15 +104,14 @@ export default function TopAppBar() {
               </Link>
             )
           })}
+          <button
+            className="flex items-center gap-1 px-1 text-slate-500 border-b-2 border-transparent hover:text-primary transition-colors"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <span className="material-symbols-outlined text-[18px]">settings</span>
+            设置
+          </button>
         </nav>
-      </div>
-      <div className="flex items-center gap-4">
-        <button
-          className="p-2 hover:bg-slate-50 transition-colors active:opacity-80 duration-150 rounded-full"
-          onClick={() => setSettingsOpen(true)}
-        >
-          <span className="material-symbols-outlined">settings</span>
-        </button>
       </div>
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <UpdateNotification />
